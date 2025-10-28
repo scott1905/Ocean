@@ -1,0 +1,540 @@
+package RT_scripts.RT_scripts1;
+
+import com.microsoft.playwright.*;
+import com.microsoft.playwright.options.SelectOption;
+import com.aventstack.extentreports.*;
+import com.aventstack.extentreports.reporter.ExtentSparkReporter;
+import org.testng.Assert;
+import org.testng.annotations.*;
+
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Paths;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
+
+public class OccenPlaywright {
+
+	Playwright playwright;
+	Browser browser;
+	BrowserContext context;
+	Page page;
+
+	ExtentReports extent;
+	ExtentTest test;
+	ExtentSparkReporter htmlReporter;
+
+	@BeforeClass
+		public void setUp() {
+		// Start Playwright
+	     try (Playwright playwright = Playwright.create()) {
+	            BrowserType.LaunchPersistentContextOptions options = new BrowserType.LaunchPersistentContextOptions()
+	                    .setHeadless(false)
+	                    .setArgs(List.of("--start-maximized"))
+	                    .setViewportSize(null);
+
+	            // Launch browser with persistent profile
+	            BrowserContext context = playwright.chromium().launchPersistentContext(Paths.get("user-data"), options);
+
+	            Page page;
+	            if (context.pages().isEmpty()) {
+	                page = context.newPage();
+	            } else {
+	                page = context.pages().get(0);
+	            }
+
+	            // Clear cookies
+	            context.clearCookies();
+
+	            // Clear localStorage and sessionStorage for all pages
+	            for (Page p : context.pages()) {
+	                p.evaluate("() => { localStorage.clear(); sessionStorage.clear(); }");
+	            }
+
+	            // Navigate to a page
+	            page.navigate("https://example.com");
+
+	            System.out.println("✅ Browser launched and cache cleared!");
+	        }
+	     
+
+        // Navigate to your OTM app
+        page.navigate("https://otmgtm-dev2-otmsaasna.otmgtm.us-phoenix-1.ocs.oraclecloud.com");
+        page.waitForLoadState();
+
+        System.out.println("✅ Browser launched in normal (non-incognito) mode!");
+    
+		// Extent reports
+		htmlReporter = new ExtentSparkReporter("ExtentReport.html");
+		extent = new ExtentReports();
+		extent.attachReporter(htmlReporter);
+		extent.setSystemInfo("OS", System.getProperty("os.name"));
+		extent.setSystemInfo("User", System.getProperty("user.name"));
+		extent.setSystemInfo("Browser", "Chromium");
+		extent.setAnalysisStrategy(com.aventstack.extentreports.AnalysisStrategy.CLASS);
+		test = extent.createTest("Occen Test Suite").assignAuthor("QA Team").assignCategory("Regression");
+
+		test.log(Status.INFO, "Starting Playwright session and navigating to application");
+
+		// navigate & login
+		page.navigate("https://otmgtm-dev2-otmsaasna.otmgtm.us-phoenix-1.ocs.oraclecloud.com", new Page.NavigateOptions().setTimeout(60000));
+		// wait for page to load
+		page.waitForLoadState();
+
+		// Click Sign In (adjust the selector if needed)
+		// original locator was a very long xpath; try a robust click-first approach and fallback
+		try {
+			page.locator("xpath=/html/body//oj-button").first().waitFor(new Locator.WaitForOptions().setTimeout(15000));
+			page.locator("xpath=/html/body//oj-button").first().click();
+		} catch (PlaywrightException e) {
+			// fallback: any clickable sign-in-ish button
+			page.locator("button:has-text(\"Unilever Email ID\"), button:has-text(\"Unilever Email IDSign In\")").first().click();
+		}
+
+		// Fill username -> Next -> password -> submit
+		page.locator("input[name=\"loginfmt\"]").waitFor(new Locator.WaitForOptions().setTimeout(15000));
+		page.fill("input[name=\"loginfmt\"]", "scott.kumar@unilever.com");
+		page.click("#idSIButton9");
+		page.locator("#i0118").waitFor(new Locator.WaitForOptions().setTimeout(15000));
+		page.fill("#i0118", "Invent@appwrk11");
+		page.click("#idSIButton9");
+
+		// Click homeButton if present
+		try {
+			page.locator("#homeButton").waitFor(new Locator.WaitForOptions().setTimeout(30000));
+			page.click("#homeButton");
+		} catch (PlaywrightException e) {
+			// continue if not found; test will assert later
+		}
+
+		// Assert home button visible as login verification
+		boolean homeVisible = false;
+		try {
+			homeVisible = page.locator("#homeButton").isVisible();
+		} catch (Exception ignored) {}
+		Assert.assertTrue(homeVisible, "Login failed or home button not found.");
+		test.log(Status.PASS, "Login successful.");
+		System.out.println("Login successful.");
+		}
+	
+		// Helper: find locator in any iframe (searches all frames, including main)
+		private Frame findFrameContainingSelector(String selector, int timeoutMs) {
+		// check main page first
+		try {
+			if (page.locator(selector).count() > 0) {
+				return page.mainFrame();
+			}
+		} catch (Exception ignored) {}
+
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			List<Frame> frames = page.frames();
+			for (Frame f : frames) {
+				try {
+					Locator l = f.locator(selector);
+					if (l.count() > 0) {
+						return f;
+					}
+				} catch (Exception ignored) {}
+			}
+			try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+		}
+		return null;
+		}
+
+
+	// Test 1 -> Order_Managment
+@Test(priority = 1)
+		public void Order_Managment() throws InterruptedException {
+		test.log(Status.INFO, "Order_Managment test started");
+		// Wait for label3 and click it - label may be in a frame
+		Frame f = findFrameContainingSelector("#label3, xpath=//[@id='label3']", 10000);
+		if (f != null) {
+			try {
+				// try clicking using the frame
+				Locator label = f.locator("#label3");
+				if (label.count() == 0) {
+					label = f.locator("xpath=//[@id='label3']");
+				}
+				label.first().waitFor(new Locator.WaitForOptions().setTimeout(8000));
+				label.first().click();
+			} catch (PlaywrightException e) {
+				// fallback: try top-level
+				page.locator("#label3").first().click();
+			}
+		} else {
+			// fallback top-level attempt
+			page.locator("#label3").first().click();
+		}
+
+		// Expand tree item (example using xpath from original)
+		try {
+			page.locator("xpath=//li[@id='sb_2_2']//ins[contains(@class,'oj-treeview-disclosure-icon')]")
+			.first().waitFor(new Locator.WaitForOptions().setTimeout(10000));
+			page.locator("xpath=//li[@id='sb_2_2']//ins[contains(@class,'oj-treeview-disclosure-icon')]").click();
+		} catch (Exception ignored) {}
+
+		// Click Order Release child
+		page.locator("xpath=//li[@id='sb_2_2_2']//span[text()='Order Release']").first().waitFor(new Locator.WaitForOptions().setTimeout(10000));
+							
+		page.locator("xpath=//li[@id='sb_2_2_2']//span[text()='Order Release']").click();
+		test.log(Status.PASS, "Clicked Order Release child");
+		Thread.sleep(20000);
+		}
+		
+		
+	// Test 2 -> In_order_release
+@Test(priority = 2)
+		public void In_order_release() throws InterruptedException {
+		test.log(Status.INFO, "In_order_release test started");
+
+		// Ensure mainIFrame is available
+		// We'll try to find the select[name='order_release/indicator'] in any frame
+		Frame frameWithDropdown = findFrameContainingSelector("select[name='order_release/indicator'][aria-label='Indicator']", 20000);
+
+		if (frameWithDropdown == null) {
+			throw new RuntimeException("Indicator dropdown not found in any iframe!");
+		}
+
+		// Click and select second option
+		Locator dropdown = frameWithDropdown.locator("select[name='order_release/indicator'][aria-label='Indicator']");
+		dropdown.first().scrollIntoViewIfNeeded();
+		dropdown.first().click();
+		// select second option by index (index 1 -> second)
+		// Playwright selectOption supports label/value/index; use index
+		dropdown.first().selectOption(new SelectOption().setIndex(1));
+
+		test.log(Status.PASS, "Dropdown clicked and option selected.");
+		System.out.println("Dropdown clicked and option selected.");
+
+		// Now click Search button (various fallbacks)
+//		String searchSelector = "xpath=//oj-button[.//span[normalize-space()='Search']]//button | " +
+//				"xpath=//button[@aria-label='Search' or @id='search' or @id='search_button' or normalize-space()='Search']";
+
+		String searchSelector1 = 
+			    "//oj-button[.//span[normalize-space()='Search']]//button" +
+			    " | " +
+			    "//button[@aria-label='Search' or @id='search' or @id='search_button' or normalize-space()='Search']";
+
+		// try same frame
+		boolean clicked = false;
+		try {
+			Locator btn = frameWithDropdown.locator(searchSelector1);
+			if (btn.count() > 0) {
+				btn.first().scrollIntoViewIfNeeded();
+				btn.first().click();
+				clicked = true;
+			}
+		} catch (Exception ignore) {}
+
+		if (!clicked) {
+			// try in all frames
+			for (Frame f : page.frames()) {
+				try {
+					Locator btn = f.locator(searchSelector1);
+					if (btn.count() > 0) {
+						btn.first().scrollIntoViewIfNeeded();
+						btn.first().click();
+						clicked = true;
+						break;
+					}
+				} catch (Exception ignore) {}
+			}
+		}
+
+		if (!clicked) {
+			// fallback top-level
+			Locator btnTop = page.locator(searchSelector1);
+			if (btnTop.count() > 0) {
+				btnTop.first().click();
+				clicked = true;
+			}
+		}
+
+		if (!clicked) {
+			throw new RuntimeException("Search button could not be clicked");
+		}
+
+		test.log(Status.PASS, "Search button clicked successfully.");
+		System.out.println("Search button clicked successfully.");
+		Thread.sleep(20000);		
+}
+		
+	// Test 3 -> Order_Releases
+@Test(priority = 3)
+		public void Order_Releases() {
+		test.log(Status.INFO, "Order_Releases test started");
+
+		// In your Selenium you switched to frame(0) and clicked a ULA/NA anchor
+		// We'll try searching for the anchor across frames then click NEW
+		Frame frameWithLink = findFrameContainingSelector("a:has-text(\"ULA/NA\")", 10000);
+		if (frameWithLink != null) {
+			Locator orderLink = frameWithLink.locator("a:has-text(\"ULA/NA\")").first();
+			orderLink.scrollIntoViewIfNeeded();
+			orderLink.click();
+		} else {
+			// fallback top-level
+			page.locator("a:has-text(\"ULA/NA\")").first().click();
+		}
+
+		// Click the NEW button (xpath taken from original)
+		Locator newBtn = page.locator("xpath=/html/body/div[1]/table/tbody/tr/td[2]/table/tbody/tr/td[3]/div/button");
+		if (newBtn.count() > 0) {
+			newBtn.first().click();
+		} else {
+			// try a generic New button text fallback
+			page.locator("button:has-text(\"New\"), button:has-text(\"NEW\")").first().click();
+		}
+		test.log(Status.PASS, "Clicked on NEW button in Order Releases page");
+	}
+
+	// Test 4 -> Order_Manager
+@Test(priority = 4)
+		public void Order_Manager() {
+		test.log(Status.INFO, "Order_Manager test started");
+
+		// Select Domain dropdown by aria-label
+		Frame fDomain = findFrameContainingSelector("select[aria-label='Domain Name']", 10000);
+		if (fDomain == null) throw new RuntimeException("Domain dropdown not found");
+		Locator domainDropdown = fDomain.locator("select[aria-label='Domain Name']").first();
+		// select by visible text -> selectOption supports label
+		domainDropdown.selectOption(new SelectOption().setLabel("ULA/NA"));
+		test.log(Status.PASS, "Selected Domain: ULA/NA");
+
+		// Fill Early Pickup Date, Late Pickup Date, Early/Late Delivery
+		LocalDate today = LocalDate.now();
+		String formattedDate = today.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 00:00:00";
+		String latePickupDate = today.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 23:59:00";
+		String earlyDeliveryDate = today.plusDays(10).format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 00:00:00";
+		String lateDeliveryDate = today.plusDays(10).format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 23:59:00";
+
+		// For each date field attempt to find it across frames
+		fillInputAcrossFrames("//input[@aria-label='Early Pickup Date']", formattedDate);
+		test.log(Status.PASS, "Entered Early Pickup Date: " + formattedDate);
+
+		fillInputAcrossFrames("//input[@aria-label='Late Pickup Date']", latePickupDate);
+		test.log(Status.PASS, "Entered Late Pickup Date: " + latePickupDate);
+
+		fillInputAcrossFrames("//input[@aria-label='Early Delivery Date']", earlyDeliveryDate);
+		test.log(Status.PASS, "Entered Early Delivery Date: " + earlyDeliveryDate);
+
+		fillInputAcrossFrames("//input[@aria-label='Late Delivery Date']", lateDeliveryDate);
+		test.log(Status.PASS, "Entered Late Delivery Date: " + lateDeliveryDate);
+
+		// Order Configuration select
+		Frame fOrderConfig = findFrameContainingSelector("select[aria-label='Order Configuration']", 10000);
+		if (fOrderConfig != null) {
+			Locator oc = fOrderConfig.locator("select[aria-label='Order Configuration']").first();
+			// choose by label (visible text) or value
+			oc.selectOption(new SelectOption().setLabel("SHIP_UNITS"));
+			test.log(Status.PASS, "Selected Order Configuration: SHIP_UNITS");
+		}
+
+		// Try to set source location (either element id or aria-label)
+		Frame fSource = findFrameContainingSelector("#order_release/source/xid, input[aria-label='Source Location ID']", 5000);
+		if (fSource != null) {
+			Locator src = fSource.locator("#order_release/source/xid, input[aria-label='Source Location ID']").first();
+			src.fill("USO4");
+		} else {
+			System.out.println("Source input not found in any iframe; continuing.");
+		}
+		}
+
+	// Test 5 -> Order_Manager1
+@Test(priority = 5)
+		public void Order_Manager1() throws InterruptedException {
+		test.log(Status.INFO, "Order_Manager1 test started");
+
+		// Destination location
+		Frame fDest = findFrameContainingSelector("#order_release/destination/xid, input[name='order_release/destination/xid']", 10000);
+		if (fDest != null) {
+			Locator dest = fDest.locator("#order_release/destination/xid, input[name='order_release/destination/xid']").first();
+			dest.fill("USB6");
+		} else {
+			// try alternative
+			fillInputAcrossFrames("//input[@aria-label='Destination Location ID']", "USB6");
+		}
+		test.log(Status.PASS, "Destination Location entered");
+
+		// Click the two buttons from original script (xpaths)
+		try {
+			page.locator("xpath=/html/body/div[6]/table/tbody/tr/td[2]/div/button").first().click();
+			page.waitForTimeout(2000);
+			page.locator("xpath=/html/body/form/div[3]/div/div[1]/table/tbody/tr[5]/td/table/tbody/tr/td/div/button").first().click();
+			page.waitForTimeout(2000);
+		} catch (Exception ignored) {}
+	}
+
+	// Test 6 -> Order_Manager2
+@Test(priority = 6)
+		public void Order_Manager2() {
+		test.log(Status.INFO, "Order_Manager2 test started");
+
+		// Fill Transport Handling Unit and counts/weights
+		fillInputAcrossFrames("//input[@aria-label='Transport Handling Unit']", "BOX_000000000084172226");
+		fillInputAcrossFrames("//input[@aria-label='Transport Handling Unit Count']", "20");
+		fillInputAcrossFrames("//input[@aria-label='Total Gross Weight']", "20400");
+
+		// Click New Line Item button
+		Frame fBtn = findFrameContainingSelector("button.enButton:has-text(\"New Line Item\"), button:has-text(\"New Line Item\")", 10000);
+		if (fBtn != null) {
+			Locator newLineItem = fBtn.locator("button.enButton:has-text(\"New Line Item\"), button:has-text(\"New Line Item\")").first();
+			newLineItem.scrollIntoViewIfNeeded();
+			newLineItem.click();
+		} else {
+			page.locator("button.enButton:has-text(\"New Line Item\"), button:has-text(\"New Line Item\")").first().click();
+		}
+
+		test.log(Status.PASS, "Clicked New Line Item button in Order Manager");
+		}
+
+	// Test 7 -> Ship_Unit_Line
+@Test(priority = 7)
+		public void Ship_Unit_Line() throws InterruptedException {
+		test.log(Status.INFO, "Ship_Unit_Line test started");
+
+		fillInputAcrossFrames("//input[@aria-label='Packaged Item ID']", "000000000020005492");
+		fillInputAcrossFrames("//input[@aria-label='Item ID']", "000000000068441373");
+		fillInputAcrossFrames("//input[@aria-label='Total Package Count']", "20");
+		fillInputAcrossFrames("//input[@aria-label='Packaging Unit']", "BOX_000000000084172488");
+		fillInputAcrossFrames("//input[@aria-label='Gross Weight']", "20400");
+		fillInputAcrossFrames("//input[@aria-label='Gross Volume']", "2380");
+		fillInputAcrossFrames("//input[@aria-label='Special Service']", "TRANSPORT");
+
+		// Click Save (transport) and Save (line item)
+		page.locator("button:has-text(\"Save\")").first().click();
+		page.waitForTimeout(2000);
+		// some other save button used later
+		page.locator("button:has-text(\"Save\")").first().click();
+		page.waitForTimeout(4000);
+
+		// Click Line Item
+		page.locator("button:has-text(\"Line Item\")").first().click();
+		page.waitForTimeout(2000);
+
+		test.log(Status.PASS, "Clicked Save button in Ship Unit Line");
+		}
+
+		// Test 8 -> Ship_Unit_Line1
+@Test(priority = 8)
+		public void Ship_Unit_Line1() throws InterruptedException {
+		test.log(Status.INFO, "Ship_Unit_Line1 test started");
+
+		page.locator("button:has-text(\"Involved Parties\")").first().click();
+		page.waitForTimeout(1000);
+
+		fillInputAcrossFrames("//input[@aria-label='Involved Party Contact']", "NA_USO4_OB_PLANNER");
+
+		// Select Involved Party Qualifier ID (first dropdown)
+		Frame fParty = findFrameContainingSelector("select[aria-label='Involved Party Qualifier ID']", 10000);
+		if (fParty != null) {
+			Locator pq = fParty.locator("select[aria-label='Involved Party Qualifier ID']").first();
+			pq.selectOption(new SelectOption().setValue("LOGISTICS"));
+			page.waitForTimeout(1000);
+
+			// Validate hidden input updated
+			Locator hidden = page.locator("input[name='display_contact_order_release_inv_party/involved_party_qual/xid']");
+			if (hidden.count() > 0) {
+				String val = hidden.first().getAttribute("value");
+				System.out.println("Captured hidden value: " + val);
+			}
+		}
+
+		// Save and proceed
+		page.locator("button.enButton:has-text(\"Save\")").first().click();
+		page.waitForTimeout(1000);
+
+		// Involved Party Location and second qualifier
+		fillInputAcrossFrames("//input[@aria-label='Involved Party Location']", "USI2");
+		Frame fParty2 = findFrameContainingSelector("(//select[@aria-label='Involved Party Qualifier ID'])[2]", 8000);
+		if (fParty2 != null) {
+			Locator pq2 = fParty2.locator("(//select[@aria-label='Involved Party Qualifier ID'])[2]").first();
+			pq2.selectOption(new SelectOption().setValue("SERVPROV.0030001584"));
+			// optionally select by visible text too
+			pq2.selectOption(new SelectOption().setLabel("LOGISTICS"));
+		}
+
+		page.locator("xpath=/html/body/form/div[3]/div/div[3]/table/tbody/tr[1]/th[4]/table/tbody/tr/td/div/button").first().click();
+		}
+
+	// Test 9 -> Ship_Unit_Line2
+@Test(priority = 9)
+		public void Ship_Unit_Line2() throws IOException {
+		test.log(Status.INFO, "Ship_Unit_Line2 test started");
+
+		page.locator("button:has-text(\"Other Attributes\")").first().click();
+		page.waitForTimeout(1000);
+		page.locator("button:has-text(\"Finished\")").first().click();
+		page.waitForTimeout(4000);
+
+		// Capture order release span text and extract numeric id
+		Locator span = page.locator("xpath=/html/body/form/div[5]/div/div/div[1]/table[3]/tbody/tr/td[2]/span").first();
+		span.waitFor(new Locator.WaitForOptions().setTimeout(15000));
+		String capturedValue = span.textContent().trim();
+		System.out.println("Captured Value: " + capturedValue);
+		String numericOnly = capturedValue.replaceAll("[^0-9]", "");
+		System.out.println("Extracted Numeric ID: " + numericOnly);
+
+		SharedData.capturedOrderReleaseID = numericOnly;
+
+		// Save to file
+		try (FileWriter fw = new FileWriter("capturedID.txt")) {
+			fw.write(numericOnly);
+		}
+		System.out.println("✅ Saved to file: " + numericOnly);
+		test.log(Status.PASS, "Captured Numeric ID Stored: " + SharedData.capturedOrderReleaseID);
+		test.log(Status.PASS, "Saved to file: " + SharedData.capturedOrderReleaseID);
+		}
+		
+		// Utility method: fill an input across frames (xpath or CSS)
+		private void fillInputAcrossFrames(String selector, String value) {
+		// try on main page first
+		try {
+			Locator l = page.locator("xpath=" + selector.replaceFirst("^xpath=", ""));
+			if (l.count() > 0) {
+				l.first().fill(value);
+				return;
+			}
+		} catch (Exception ignored) {}
+
+		for (Frame f : page.frames()) {
+			try {
+				Locator l = f.locator(selector);
+				if (l.count() > 0) {
+					l.first().scrollIntoViewIfNeeded();
+					l.first().fill(value);
+					return;
+				}
+				// If selector was xpath style, also try without prefix
+				// (Playwright Java Locator accepts xpath= prefix; above already tries)
+			} catch (Exception ignored) {}
+		}
+
+		// last-ditch: try evaluating a querySelector on page
+		try {
+			page.evaluate("(selector, value) => { const el = document.querySelector(selector); if (el) el.value = value; }", selector);
+		} catch (Exception ignored) {}
+		}
+
+@AfterClass
+		public void tearDown() {
+		if (context != null) {
+			context.close();
+		}
+		if (browser != null) {
+			browser.close();
+		}
+		if (playwright != null) {
+			playwright.close();
+		}
+		if (extent != null) extent.flush();
+		test.log(Status.INFO, "Playwright session closed.");
+		}
+
+		public static class SharedData {
+		public static String capturedOrderReleaseID;
+		}
+		}
