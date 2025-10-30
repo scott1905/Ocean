@@ -1,1192 +1,1923 @@
-package RT_scripts.RT_scripts1;
+package rt.scripts.playwright;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.NoSuchElementException;
-import org.openqa.selenium.By;
-import org.openqa.selenium.JavascriptExecutor;
-import org.openqa.selenium.Keys;
-import org.openqa.selenium.NoSuchFrameException;
-import org.openqa.selenium.TimeoutException;
-import org.openqa.selenium.WebElement;
-import org.openqa.selenium.chrome.ChromeDriver;
-import org.openqa.selenium.support.ui.ExpectedConditions;
-import org.openqa.selenium.support.ui.Select;
-import org.openqa.selenium.support.ui.WebDriverWait;
+import com.microsoft.playwright.*;
+import com.microsoft.playwright.options.*;
+
+
 import org.testng.Assert;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.Test;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.io.FileWriter;
-import java.io.IOException;
-import com.aventstack.extentreports.ExtentReports;
-import com.aventstack.extentreports.ExtentTest;
-import com.aventstack.extentreports.Status;
+import org.testng.annotations.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.Optional;
+
+import com.aventstack.extentreports.*;
 import com.aventstack.extentreports.reporter.ExtentSparkReporter;
 
+public class OccenPlaywright {
+	// --- Playwright objects ---
+	private Playwright playwright;
+	private Browser browser;
+	private BrowserContext context;
+	private Page page;
 
-
-public class Occen {
-
-	private static final String priority = null;
-	ChromeDriver driver;
-	WebDriverWait wait;
+	// --- Reporting ---
 	ExtentReports extent;
 	ExtentTest test;
 	ExtentSparkReporter htmlReporter;
 
+	public static class SharedData {
+		public static String capturedOrderReleaseID;
+	}
 
-	
 	@BeforeClass
-	public void setUp() throws InterruptedException {
-		driver = new ChromeDriver();
-		driver.manage().window().maximize();
-		wait = new WebDriverWait(driver, Duration.ofSeconds(600));
+	public void setUpAndLogin() throws Exception {
+		// ===== Extent Report Setup =====
 		htmlReporter = new ExtentSparkReporter("ExtentReport.html");
 		extent = new ExtentReports();
 		extent.attachReporter(htmlReporter);
 		extent.setSystemInfo("OS", System.getProperty("os.name"));
 		extent.setSystemInfo("User", System.getProperty("user.name"));
-		extent.setSystemInfo("Browser", "Chrome");
-		extent.setAnalysisStrategy(com.aventstack.extentreports.AnalysisStrategy.CLASS);
-		test = extent.createTest("Occen Test Suite").assignAuthor("QA Team").assignCategory("Regression");
+		extent.setSystemInfo("Browser", "Chrome (Playwright)");
+		extent.setAnalysisStrategy(AnalysisStrategy.CLASS);
+		test = extent.createTest("OCCEN Playwright Suite").assignAuthor("QA Team").assignCategory("Regression");
 
+		// ===== Playwright Setup (assign to fields, no shadowing) =====
+		this.playwright = Playwright.create();
 
+		// Fresh user-data-dir is safer than deleting a few lock files
+		Path userDataDir = Paths.get(System.getProperty("user.dir")).resolve("pw-user-data");
+		if (Files.exists(userDataDir)) {
+			Files.walk(userDataDir)
+			.sorted(Comparator.reverseOrder())
+			.forEach(p -> { try { Files.delete(p); } catch (Exception ignore) {} });
+		}
+		Files.createDirectories(userDataDir);
 
-		test.log(Status.INFO, "Running Login Test...");
+		BrowserType.LaunchPersistentContextOptions options = new BrowserType.LaunchPersistentContextOptions()
+				.setChannel("chrome")
+				.setHeadless(false)
+				.setArgs(Arrays.asList(
+						"--no-first-run",
+						"--no-default-browser-check",
+						"--disable-extensions",
+						"--start-maximized"
+						// IMPORTANT on Windows corp machines: avoid --no-sandbox
+						))
+				.setViewportSize(null);
 
-		driver.get("https://otmgtm-dev2-otmsaasna.otmgtm.us-phoenix-1.ocs.oraclecloud.com");
-		Thread.sleep(5000);
-		// Wait for and click Sign In button (adjust locator if needed)
-		WebElement signInBtn = wait.until(ExpectedConditions.elementToBeClickable(
-				By.xpath("/html/body/div/oj-idaas-signin-app-shell-rw/div[1]/div/div/div/div[2]/div/div/oj-module/div[1]/oj-module/div[1]/div/div[3]/div[1]/div/oj-button")));
+		// Persistent context gives you a BrowserContext directly
+		this.context = this.playwright.chromium().launchPersistentContext(userDataDir, options);
+		this.browser = this.context.browser(); // optional, if you need it
+
+		// Close any internal Chrome tabs (non-navigable)
+		for (Page p : this.context.pages()) {
+			String u = p.url();
+			if (u.startsWith("chrome://") || u.startsWith("chrome-search://") || u.isEmpty()) {
+				p.close();
+			}
+		}
+
+		// Always create a fresh controllable page
+		this.page = this.context.newPage();
+		this.context.setDefaultTimeout(60_000);
+		this.context.setDefaultNavigationTimeout(60_000);
+
+		String url = "https://otmgtm-dev2-otmsaasna.otmgtm.us-phoenix-1.ocs.oraclecloud.com";
+		test.log(Status.INFO, "Navigating to: " + url);
+		this.page.bringToFront();
+		this.page.navigate(url, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+		System.out.println("Now at: " + this.page.url());
+
+		// ===== Login Steps =====
+		Locator signInBtn = this.page.locator(
+				"xpath=/html/body/div/oj-idaas-signin-app-shell-rw/div[1]/div/div/div/div[2]/div/div/oj-module/div[1]/oj-module/div[1]/div/div[3]/div[1]/div/oj-button");
+		signInBtn.waitFor();
 		signInBtn.click();
 
-		// Enter username
-		WebElement username = wait.until(ExpectedConditions.visibilityOfElementLocated(By.name("loginfmt")));
-		username.sendKeys("scott.kumar@unilever.com"); // Hard coded for temporary purpose
-		//click on next
-		driver.findElement(By.id("idSIButton9")).click();
-		// Enter password
-		WebElement password = wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("i0118")));
-		password.sendKeys("Invent@appwrk11"); // Hard coded for temporary purpose
+		String user = System.getenv().getOrDefault("OTM_USER", "scott.kumar@unilever.com");
+		String pass = System.getenv().getOrDefault("OTM_PASS", "Invent@appwrk11");
 
-		// Click submit (assuming it's a button or input type submit)
-		WebElement submitBtn = wait.until(ExpectedConditions.elementToBeClickable(
-				By.id("idSIButton9")
-				));
-		submitBtn.click();
+		Locator username = this.page.locator("[name=loginfmt]");
+		username.waitFor();
+		username.fill(user);
+		this.page.locator("#idSIButton9").click();
 
-		wait.until(ExpectedConditions.elementToBeClickable(By.id("homeButton"))).click();
-		driver.findElement(By.id("homeButton")).click();
-		// Verify login by checking for a known post-login element
-		WebElement homeButton = wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("homeButton")));
-		Assert.assertTrue(homeButton.isDisplayed(), "Login failed or home button not found.");
+		Locator password = this.page.locator("#i0118");
+		password.waitFor();
+		password.fill(pass);
+		this.page.locator("#idSIButton9").click();
+
+		Locator homeBtn = this.page.locator("#homeButton");
+		homeBtn.waitFor();
+		Assert.assertTrue(homeBtn.isVisible(), "Login failed or home button not found.");
 		test.log(Status.PASS, "Login successful.");
-		System.out.println("Login successful.");
-		Thread.sleep(2000);
-
+		Thread.sleep(15000); // brief pause to ensure stability
 	}
+	private static final double TIMEOUT = 15_000; // ms
 
-	// Inside your class Occen
-
+	// --- Priority 1 ---
 	@Test(priority = 1)
-	public void Order_Managment() throws InterruptedException {
-		test.log(Status.INFO, "Order_Managment test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
+	public void Order_Managment() { 
+		waitForNetworkAndDom(page);
 
-		// Initialize helper
-		RobustTestHelper helper = new RobustTestHelper(driver);
+		// 2) Find the frame that contains the #label3 element (recursively searches all iframes)
+		Frame targetFrame = findFirstFrameWithSelector(page, "#label3", TIMEOUT)
+				.orElseThrow(() -> new RuntimeException("Could not find a frame containing #label3"));
 
-		// Test steps
-		helper.waitForPageLoad();
-		helper.switchToFrameContainingAny(By.id("label3"));
-		helper.waitAndClick(By.id("label3"));
-		Thread.sleep(6000);
-		wait.until(ExpectedConditions.visibilityOfElementLocated(By.xpath("//li[@id='sb_2_2']//ins[contains(@class,'oj-treeview-disclosure-icon')]\r\n"
-				+ ""))).click();
-		Thread.sleep(5000);
+		// 3) Click the label (#label3)
+		Locator label3 = targetFrame.locator("#label3");
+		label3.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(TIMEOUT));
+		label3.click(new Locator.ClickOptions().setTimeout(TIMEOUT));
 
-		// Or if you want the 3rd child (Order Release)
-		WebElement orderReleaseChild = wait.until(
-				ExpectedConditions.elementToBeClickable(
-						By.xpath("//li[@id='sb_2_2_2']//span[text()='Order Release']")
-						)
-				); 
-		Thread.sleep(1000);		    
-		orderReleaseChild.click();
-		test.log(Status.PASS, "Clicked Order Release child");
-		//	logStep("Clicked Order Release child");
+		// 4) Expand the tree node: //li[@id='sb_2_2']//ins[contains(@class,'oj-treeview-disclosure-icon')]
+		Locator disclosure = targetFrame.locator("//li[@id='sb_2_2']//ins[contains(@class,'oj-treeview-disclosure-icon')]");
+		disclosure.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(TIMEOUT));
+		disclosure.click(new Locator.ClickOptions().setTimeout(TIMEOUT));
+
+		// 5) Click the third child "Order Release": //li[@id='sb_2_2_2']//span[text()='Order Release']
+		Locator orderRelease = targetFrame.locator("//li[@id='sb_2_2_2']");
+		orderRelease.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(TIMEOUT));
+		orderRelease.click(new Locator.ClickOptions().setTimeout(TIMEOUT));
+
+		// Optional: verification that the click led somewhere meaningful (adjust selector to your app)
+		// targetFrame.getByRole(AriaRole.HEADING, new Frame.GetByRoleOptions().setName("Order Release")).waitFor();
 	}
 
-	@Test(priority = 2)
-	public void In_order_release() throws InterruptedException {
-		test.log(Status.INFO, "In_order_release test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(60));
-		RobustTestHelper helper = new RobustTestHelper(driver);
-		helper.waitForPageLoad();
+	private static void waitForNetworkAndDom(Page page) {
+		// Playwright auto-waits on actions, but a one-time page settle is handy:
+		// Wait for DOM content and then network quiet.
+		page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+		page.waitForLoadState(LoadState.NETWORKIDLE);
+	}
 
-		// Switch to main iframe
-		driver.switchTo().defaultContent();
-		wait.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("mainIFrame")));
+	/**
+	 * Recursively searches all frames for one that contains an element matching `selector`.
+	 * Uses a BFS so we find higher-level frames first.
+	 */
+	private static Optional<Frame> findFirstFrameWithSelector(Page page, String selector, double timeoutMs) {
+		Deque<Frame> q = new ArrayDeque<>(page.frames());
+		long deadline = System.nanoTime() + (long)(timeoutMs * 1_000_000);
 
-		// Try to find the indicator dropdown in mainIFrame or its child iframes
-		boolean dropdownClicked = false;
-		List<WebElement> allFrames = driver.findElements(By.tagName("iframe"));
-
-		for (int i = -1; i < allFrames.size(); i++) {
+		while (!q.isEmpty()) {
+			Frame f = q.removeFirst();
 			try {
-				driver.switchTo().defaultContent();
-				wait.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("mainIFrame")));
-
-				if (i >= 0) driver.switchTo().frame(i);  // skip -1 iteration
-
-				WebElement indicatorDropdown = wait.until(ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//select[@name='order_release/indicator' and @aria-label='Indicator']")
-						));
-
-				((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView({block:'center'});", indicatorDropdown);
-				indicatorDropdown.click();
-
-				// Select the second option (change if needed)
-				WebElement option = indicatorDropdown.findElement(By.xpath("./option[2]"));
-				option.click();
-				test.log(Status.PASS, "Dropdown clicked and option selected.");
-				System.out.println("Dropdown clicked and option selected.");
-				dropdownClicked = true;
-				break;
-			} catch (Exception e) {
-				// continue to next frame
+				// Try a very short wait in this frame; if it appears we’re done.
+				f.waitForSelector(selector,
+						new Frame.WaitForSelectorOptions()
+						.setTimeout(500) // quick probe per frame
+						.setState(WaitForSelectorState.ATTACHED));
+				return Optional.of(f);
+			} catch (PlaywrightException ignored) {
+				// Not in this frame (or not yet attached)
 			}
+			// Enqueue children to search deeper
+			q.addAll(f.childFrames());
+
+			// Respect overall timeout
+			if (System.nanoTime() > deadline) break;
 		}
 
-		if (!dropdownClicked) {
-			throw new RuntimeException("Indicator dropdown not found in any iframe!");
-		}
-
-		// Now locate and click the Search button
-		By searchBtn = By.xpath(
-				"//oj-button[.//span[normalize-space()='Search']]//button | " +
-						"//button[@aria-label='Search' or @id='search' or @id='search_button' or normalize-space()='Search']"
-				);
-
-		driver.switchTo().defaultContent();
-		wait.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("mainIFrame")));
-
-		List<WebElement> searchFrames = driver.findElements(By.tagName("iframe"));
-		boolean searchClicked = false;
-
-		// 1) Try in mainIFrame
-		try {
-			WebElement btn = wait.until(ExpectedConditions.elementToBeClickable(searchBtn));
-			((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView({block:'center'});", btn);
-			btn.click();
-			searchClicked = true;
-		} catch (Exception ignore) {}
-
-		// 2) Try child iframes
-		if (!searchClicked) {
-			for (WebElement frame : searchFrames) {
-				try {
-					driver.switchTo().defaultContent();
-					wait.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("mainIFrame")));
-					driver.switchTo().frame(frame);
-
-					WebElement btn = wait.until(ExpectedConditions.elementToBeClickable(searchBtn));
-					((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView({block:'center'});", btn);
-					btn.click();
-					searchClicked = true;
-					break;
-				} catch (Exception ignore) {}
-			}
-		}
-
-		// 3) Fallback: try default content
-		if (!searchClicked) {
-			driver.switchTo().defaultContent();
-			WebElement btn = wait.until(ExpectedConditions.elementToBeClickable(searchBtn));
-			btn.click();
-		}
-
-		test.log(Status.PASS, "Search button clicked successfully.");
-		System.out.println("Search button clicked successfully.");
-
-	}
-
-
-	//page where we need to click on new button
-	@Test(priority = 3)
-	public void Order_Releases() {
-		test.log(Status.INFO, "Order_Releases test started");
-
-		//		List<WebElement> allLinks = driver.findElements(By.tagName("a"));
-		//		System.out.println("Total links found: " + allLinks.size());
-		//		for (WebElement link : allLinks) {
-		//		    System.out.println("Link text: '" + link.getText() + "'");
-		//		}
-
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(5));
-
-		// 1) Switch to frame if needed (example with index 0, adjust if multiple)
-		driver.switchTo().defaultContent(); 
-		driver.switchTo().frame(0);  
-
-		// 2) Wait for table or parent container first
-		wait.until(ExpectedConditions.presenceOfElementLocated(By.xpath("//table")));
-
-		// 3) Find link by partial match
-
-
-		WebElement orderLink = wait.until(ExpectedConditions.presenceOfElementLocated(
-				By.xpath("//a[contains(text(),'ULA/NA')]")));
-
-		// 4) Scroll & click
-		((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView(true);", orderLink);
-		wait.until(ExpectedConditions.elementToBeClickable(orderLink)).click();
-
-
-
-		//Click on NEW
-		WebElement element11 = wait.until(ExpectedConditions.elementToBeClickable(
-				By.xpath("/html/body/div[1]/table/tbody/tr/td[2]/table/tbody/tr/td[3]/div/button")
-				));
-
-		element11.click();
-		test.log(Status.PASS, "Clicked on NEW button in Order Releases page");
-		//	logStep("Clicked on NEW button in Order Releases page");
-	}
-	@Test(priority = 4)
-	public void Order_Manager() throws InterruptedException { 
-		test.log(Status.INFO, "Order_Manager test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(20));
-
-		//		WebElement orderReleaseInput = wait.until(
-		//				ExpectedConditions.visibilityOfElementLocated(
-		//						By.xpath("/html/body/form/div[3]/div/div[1]/table/tbody/tr[1]/td[1]/div/input[2]")
-		//						)
-		//				);
-		//
-		//		// now safe to interact
-		//		orderReleaseInput.sendKeys("20211005-0003");
-
-		// Locate the dropdown
-		WebElement domainDropdown = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(By.xpath("//select[@aria-label='Domain Name']"))
-				);
-
-		// Wrap with Select class
-		Select selectDomain = new Select(domainDropdown);
-
-		// Select by visible text
-		selectDomain.selectByVisibleText("ULA/NA");
-
-		// ✅ Verify selected
-		test.log(Status.PASS, "Selected Domain: " + selectDomain.getFirstSelectedOption().getText());
-
-		LocalDate today = LocalDate.now();
-		String formattedDate = today.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 00:00:00";
-		// Locate the Early Pickup Date input
-		WebElement earlyPickupDate = wait.until(ExpectedConditions.visibilityOfElementLocated(
-				By.xpath("//input[@aria-label='Early Pickup Date']")
-				));
-
-		// Clear any existing value
-		earlyPickupDate.clear();
-
-		// Send the formatted date
-		earlyPickupDate.sendKeys(formattedDate);
-
-		test.log(Status.PASS, "Entered Early Pickup Date: " + formattedDate);
-
-
-
-		LocalDate today1 = LocalDate.now();
-		String latePickupDate = today1.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 23:59:00";
-		// Locate the Late Pickup Date input
-		WebElement latePickup = wait.until(ExpectedConditions.visibilityOfElementLocated(
-				By.xpath("//input[@aria-label='Late Pickup Date']")
-				));
-
-		// Clear any old value
-		latePickup.clear();
-
-		// Send today’s date with 23:59:00
-		latePickup.sendKeys(latePickupDate);
-
-		// Optional: Tab out so OTM registers it
-		latePickup.sendKeys(Keys.TAB);
-
-		test.log(Status.PASS, "Entered Late Pickup Date: " + latePickupDate);
-
-
-		LocalDate today12 = LocalDate.now();
-		String earlyDeliveryDate = today.plusDays(10)
-				.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 00:00:00";
-		// Locate Early Delivery Date input
-		WebElement earlyDelivery = wait.until(ExpectedConditions.visibilityOfElementLocated(
-				By.xpath("//input[@aria-label='Early Delivery Date']")
-				));
-
-		// Clear existing value
-		earlyDelivery.clear();
-
-		// Send calculated date
-		earlyDelivery.sendKeys(earlyDeliveryDate);
-
-		// Optional: tab out
-		earlyDelivery.sendKeys(Keys.TAB);
-
-		test.log(Status.PASS, "Entered Early Delivery Date: " + earlyDeliveryDate);
-
-
-
-		LocalDate today3 = LocalDate.now();
-		String lateDeliveryDate = today.plusDays(10)
-				.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 23:59:00";
-		// Locate Late Delivery Date input
-		WebElement lateDelivery = wait.until(ExpectedConditions.visibilityOfElementLocated(
-				By.xpath("//input[@aria-label='Late Delivery Date']")
-				));
-
-		// Clear old value
-		lateDelivery.clear();
-
-		// Send the calculated date
-		lateDelivery.sendKeys(lateDeliveryDate);
-
-		// Optional: blur/tab out so OTM registers the value
-		lateDelivery.sendKeys(Keys.TAB);
-
-		test.log(Status.PASS, "Entered Late Delivery Date: " + lateDeliveryDate);
-
-
-		///////////////////////////////////////////////////////////////////////////
-
-
-
-		WebDriverWait wait1 = new WebDriverWait(driver, Duration.ofSeconds(20));
-
-		// wait until the dropdown is visible
-		WebElement orderConfigDropdown = wait1.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//select[@aria-label='Order Configuration']")
-						)
-				);
-
-		// create a Select object
-		Select orderConfig = new Select(orderConfigDropdown);
-
-		// Example 1: select by visible text
-		orderConfig.selectByVisibleText("SHIP_UNITS");
-		test.log(Status.PASS, "Selected by visible text");
-
-
-		WebDriverWait wait11 = new WebDriverWait(driver, Duration.ofSeconds(20));
-
-		// Example: replace with your actual iframe XPath or id
-
-		// Get all iframes on the page
-		// Check if any iframes exist
-		List<WebElement> frames = driver.findElements(By.tagName("iframe"));
-
-		if (frames.size() > 0) {
-			System.out.println("Iframe found. Switching to the first one for example...");
-
-			// Optionally, you can loop and find the correct iframe by id or src
-			boolean switched = false;
-			for (WebElement frame : frames) {
-				try {
-					driver.switchTo().frame(frame);
-					// Check if the target element exists in this frame
-					if (driver.findElements(By.id("order_release/source/xid")).size() > 0) {
-						System.out.println("Found element in this iframe.");
-						switched = true;
-						break;
-					} else {
-						// Not this frame, switch back
-						driver.switchTo().defaultContent();
-					}
-				} catch (NoSuchFrameException e) {
-					System.out.println("Unable to switch to iframe: " + e.getMessage());
-				}
-			}
-
-			if (!switched) {
-				System.out.println("Element not found in any iframe.");
-			}
-
-		} else {
-			System.out.println("No iframes found. Searching in default content...");
-		}
-
-		// Now, try to interact with the element in the current context
-		try {
-			WebElement sourceInput = new WebDriverWait(driver, Duration.ofSeconds(5))
-					.until(ExpectedConditions.visibilityOfElementLocated(By.id("order_release/source/xid")));
-			sourceInput.sendKeys("USO4");
-		} catch (TimeoutException e) {
-			System.out.println("Element not found in page: " + e.getMessage());
-
-
-
-			WebElement sourceLocation = wait.until(ExpectedConditions.visibilityOfElementLocated(
-					By.xpath("//input[@aria-label='Source Location ID']\r\n"
-							+ "")
-					));
-			sourceLocation.clear();
-
-			sourceLocation.sendKeys("USO4");
-
-			driver.switchTo().defaultContent();
-
-		}  
-	}
-
-
-	@Test(priority = 5)
-	public void Order_Manager1() throws InterruptedException { 
-		test.log(Status.INFO, "Order_Manager1 test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
-		String msg = handleAlert(driver, true); 
-		// Helper function to switch to the iframe containing the element
-		List<WebElement> frames = driver.findElements(By.tagName("iframe"));
-		boolean found = false;
-
-		for (WebElement frame : frames) {
-			driver.switchTo().frame(frame);
-			if (driver.findElements(By.name("order_release/destination/xid")).size() > 0) {
-				found = true;
-				break;
-			} else {
-				driver.switchTo().defaultContent();
-			}
-		}
-
-		if (!found) {
-			System.out.println("Element not found in any iframe, staying in default content.");
-		}
-
-		// DESTINATION LOCATION FIELD
-		By destinationLocator = By.id("order_release/destination/xid");
-
-		try {
-			WebElement destInput = new WebDriverWait(driver, Duration.ofSeconds(15))
-					.until(ExpectedConditions.visibilityOfElementLocated(destinationLocator));
-			destInput.sendKeys("USB6");
-		} catch (TimeoutException e) {
-			System.out.println("Element not found in default content: " + e.getMessage());
-
-			// Try switching to the iframe containing the element
-			switchToFrameContainingElement1(destinationLocator);
-
+		// If quick probes didn’t find it, do a second, slower pass in case it just needed more time.
+		q.clear();
+		q.addAll(page.frames());
+		while (!q.isEmpty()) {
+			Frame f = q.removeFirst();
 			try {
-				WebElement destInputFrame = new WebDriverWait(driver, Duration.ofSeconds(15))
-						.until(ExpectedConditions.visibilityOfElementLocated(destinationLocator));
-				destInputFrame.clear();
-				destInputFrame.sendKeys("USC6");
-			} catch (TimeoutException ex) {
-				System.out.println("Element not found even in iframe: " + ex.getMessage());
-			}
-
-			driver.switchTo().defaultContent();
+				f.waitForSelector(selector,
+						new Frame.WaitForSelectorOptions()
+						.setTimeout(3_000) // slower pass
+						.setState(WaitForSelectorState.ATTACHED));
+				return Optional.of(f);
+			} catch (PlaywrightException ignored) { }
+			q.addAll(f.childFrames());
+			if (System.nanoTime() > deadline) break;
 		}
-		test.log(Status.PASS, "Destination Location entered");
-		WebDriverWait wait1 = new WebDriverWait(driver, Duration.ofSeconds(10));
 
-		driver.findElement(By.xpath("/html/body/div[6]/table/tbody/tr/td[2]/div/button")).click();
-		Thread.sleep(4000);
-		driver.findElement(By.xpath("/html/body/form/div[3]/div/div[1]/table/tbody/tr[5]/td/table/tbody/tr/td/div/button")).click();
-		Thread.sleep(4000);
+		return Optional.empty();
 	}
 
-	// Move this outside the test method
-	private void switchToFrameContainingElement1(By destinationLocator) {
+	// --- Example harness (if you want to run this standalone) ---
+	public static void main(String[] args) {
+		try (Playwright pw = Playwright.create()) {
+			Browser browser = pw.chromium().launch(new BrowserType.LaunchOptions().setHeadless(false));
+			BrowserContext ctx = browser.newContext(new Browser.NewContextOptions()
+					.setViewportSize(1280, 800));
+			Page page = ctx.newPage();
 
-	}
+			// TODO: navigate to your AUT
+			// page.navigate("https://your-app.example.com");
 
-	@Test(priority = 6)
-
-	//Ship unit > Transport Handling Unit
-	public void Order_Manager2() throws InterruptedException {
-		test.log(Status.INFO, "Order_Manager2 test started");
-		WebDriverWait localWait = new WebDriverWait(driver, Duration.ofSeconds(30));
-		//		WebElement shipUnitId = localWait
-		//				.until(ExpectedConditions.visibilityOfElementLocated(By.xpath("//input[@aria-label='Ship Unit ID']")));
-		//		shipUnitId.clear();
-		//				shipUnitId.sendKeys("20211005-0001");
-		//				shipUnitId.sendKeys(Keys.TAB);
-
-
-		WebDriverWait shortWait = new WebDriverWait(driver, Duration.ofSeconds(20));
-		WebElement thuInput = localWait
-				.until(ExpectedConditions.visibilityOfElementLocated(By.xpath("//input[@aria-label='Transport Handling Unit']")));
-		thuInput.clear();
-		thuInput.sendKeys("BOX_000000000084172226");
-		thuInput.sendKeys(Keys.TAB);
-
-
-		WebElement thuCountInput = shortWait
-				.until(ExpectedConditions.visibilityOfElementLocated(By.xpath("//input[@aria-label='Transport Handling Unit Count']")));
-		thuCountInput.clear();
-		thuCountInput.sendKeys("20");
-
-		WebElement grossWeightInput = shortWait
-				.until(ExpectedConditions.visibilityOfElementLocated(By.xpath("//input[@aria-label='Total Gross Weight']")));
-		grossWeightInput.clear();
-		grossWeightInput.sendKeys("20400");
-		((JavascriptExecutor) driver).executeScript("window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });");
-		WebElement newLineItem = shortWait
-				.until(ExpectedConditions.elementToBeClickable(By.xpath("//button[@class='enButton' and text()='New Line Item']")));
-		((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView({block:'center'});", newLineItem);
-		newLineItem.click();
-
-		test.log(Status.PASS, "Clicked New Line Item button in Order Manager");
-		//		logStep("Clicked New Line Item button in Order Manager");
-	}
-
-	@Test(priority = 7)
-	//Ship unit > Transport Handling Unit ||SCROLL|| > New Line Item
-	public void Ship_Unit_Line() throws InterruptedException {
-		test.log(Status.INFO, "Ship_Unit_Line test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
-		//Packaged Item ID
-		WebElement itemInput = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Packaged Item ID']\r\n" + "")));
-		itemInput.sendKeys("000000000020005492");   //This need to change as per data
-		Thread.sleep(2000);
-		//Item ID
-		WebElement Item_ID = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Item ID']" + "")));
-		Item_ID.sendKeys("000000000068441373");   //This need to change as per data
-		Thread.sleep(2000);
-		//'Total Package Count' 
-		WebElement Total_Package_Count = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Total Package Count']" + "")));
-		Total_Package_Count.sendKeys("20");
-		Thread.sleep(2000);
-		//Packaging Unit
-
-		WebElement Packaging_Unit = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Packaging Unit']\r\n"
-								+ "" + "")));
-		Packaging_Unit.sendKeys("BOX_000000000084172488");
-		Thread.sleep(2000);
-		//Gross Weight
-		WebElement Gross_Weight = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Gross Weight']\r\n"
-								+ "")));
-		Gross_Weight.sendKeys("20400");
-		Thread.sleep(2000);
-		//Volume 2380
-		WebElement Volume = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Gross Volume']\r\n"
-								+ "")));
-		Volume.sendKeys("2380");
-		Thread.sleep(2000);
-
-		WebElement transport = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Special Service']\r\n"
-								+ "")));
-		transport.sendKeys("TRANSPORT");
-		Thread.sleep(2000);
-
-		//click on transport save
-		WebElement transport1 = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//button[normalize-space()='Save']\r\n"
-								+ "")));
-		transport1.click();
-		//Click on Save
-		WebElement Save = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//button[contains(@onclick,\"checkPiForItem()\") and text()='Save']\r\n"
-								+ "")));
-		Save.click();	
-		Thread.sleep(6000);
-		//scroll to bottom
-		((JavascriptExecutor) driver).executeScript("window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });");
-
-		String msg = handleAlert(driver, true); 
-		//click on new line item
-		driver.findElement(By.xpath("//button[contains(@onclick,'checkData') and text()='Save']"
-				+ "")).click();		
-		Thread.sleep(4000);
-		WebElement Save1 = wait.until(
-				ExpectedConditions.visibilityOfElementLocated((By.xpath("//button[normalize-space(.)='Line Item']\r\n"
-						+ ""))));
-		Save1.click();
-		Thread.sleep(2000);
-		test.log(Status.PASS, "Clicked Save button in Ship Unit Line");
-	}
-	@Test(priority = 8)
-	//Ship unit > Transport Handling Unit ||SCROLL|| > New Line Item 
-	public void Ship_Unit_Line1() throws InterruptedException {
-		test.log(Status.INFO, "Ship_Unit_Line1 test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
-		String msg = handleAlert(driver, true); 
-		// Involved Party Contact
-		WebElement Save = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//button[normalize-space(.)='Involved Parties']\r\n"
-								+ ""))); 
-		Save.click();	
-		Thread.sleep(2000);
-
-		//'Involved Party Contact'
-		WebElement Involved_Party_Contact = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Involved Party Contact']\r\n"
-								+ "")));
-		Involved_Party_Contact.sendKeys("NA_USO4_OB_PLANNER");
-
-		//Involved Party Qualifier ID
-		//		WebElement Involved_Party_Qualifier_ID = wait111.until(
-		//				ExpectedConditions.visibilityOfElementLocated(
-		//						By.xpath("//select[@aria-label='Involved Party Qualifier ID']"
-		//								+ "")));
-		//		          Involved_Party_Qualifier_ID.click();
-
-		// Wait until the dropdown is visible
-		WebElement partyQualifierDropdown = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//select[@aria-label='Involved Party Qualifier ID']")
-						)
-				);
-
-		// Create Select object
-		Select select = new Select(partyQualifierDropdown);
-
-		// Option 1: Select by value (note: use the full value attribute, not just digits)
-		select.selectByValue("LOGISTICS");
-
-		// Option 2: Select by visible text (the text shown in dropdown)
-		// select.selectByVisibleText("0030001584");
-
-		// Small wait if needed to allow onchange JS to update hidden field
-		Thread.sleep(2000);
-
-		// Verify the hidden field updated
-		WebElement hiddenField = driver.findElement(
-				By.xpath("//input[@name='display_contact_order_release_inv_party/involved_party_qual/xid']")
-				);
-		String hiddenValue = hiddenField.getAttribute("value");
-		System.out.println("Captured hidden value: " + hiddenValue);
-
-
-
-		String msg11 = handleAlert(driver, true); 
-		//		driver.findElement(By.xpath("/select[@aria-label='Involved Party Qualifier ID']/option[2]")).click();
-		Thread.sleep(2000);
-
-		driver.findElement(By.xpath("//button[@class='enButton' and normalize-space(text())='Save']")).click(); 
-
-		// Involved Party Location
-		WebElement Involved_Party_Location = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//input[@aria-label='Involved Party Location']")));
-		Involved_Party_Location.sendKeys("USI2");
-		Thread.sleep(2000);
-		// Wait until dropdown is visible
-		// Click to open dropdown
-
-		// Wait for the dropdown to be visible
-		WebElement partyQualifierDropdown1 = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("(//select[@aria-label='Involved Party Qualifier ID'])[2]")
-						)
-				);
-
-		// Create Select object
-		Select select1 = new Select(partyQualifierDropdown1);
-
-		// Option 1: Select by value
-		select1.selectByValue("SERVPROV.0030001584");
-
-		// Option 2: Select by visible text (if you want just "0030001584")
-		select1.selectByVisibleText("LOGISTICS");
-
-		// Optional: print selected option
-		System.out.println("Selected: " + select1.getFirstSelectedOption().getText());
-
-		Thread.sleep(2000);
-
-
-
-
-		// Confirm value updated in hidden field
-		WebElement hiddenField1 = driver.findElement(
-				By.xpath("//input[@name='display_contact_order_release_inv_party/involved_party_qual/xid']")
-				);
-		String hiddenValue1 = hiddenField1.getAttribute("value");
-		System.out.println("Selected qualifier value: " + hiddenValue1);
-
-		driver.findElement(By.xpath("/html/body/form/div[3]/div/div[3]/table/tbody/tr[1]/th[4]/table/tbody/tr/td/div/button")).click();
-		//Contacts
-	}
-	@Test(priority = 9)
-	public void Ship_Unit_Line2() throws InterruptedException, IOException {
-		test.log(Status.INFO, "Ship_Unit_Line2 test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
-		String msg = handleAlert(driver, true); 
-		//other attributes
-		WebElement Contacts = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//button[normalize-space(text())='Other Attributes']\r\n"
-								+ "")));
-		// button clicked other attributes 		
-		Contacts.click();
-		Thread.sleep(2000);
-		WebElement Save1 = wait.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("//button[normalize-space(text())='Finished']\r\n" + "")));
-		Save1.click();
-		Thread.sleep(5000);	
-
-		// Locate the span and capture the value
-		WebDriverWait wait1 = new WebDriverWait(driver, Duration.ofSeconds(20));
-
-		// ✅ Point to the <span>, not /text()
-		WebElement orderReleaseElement = wait1.until(
-				ExpectedConditions.visibilityOfElementLocated(
-						By.xpath("/html/body/form/div[5]/div/div/div[1]/table[3]/tbody/tr/td[2]/span")
-						)
-				);
-
-		// Get the full text inside the span
-		String capturedValue = orderReleaseElement.getText().trim();  // e.g. "ULA/NA.0410858884"
-		System.out.println("Captured Value: " + capturedValue);
-
-		// Extract only numbers
-		String numericOnly = capturedValue.replaceAll("[^0-9]", "");
-		System.out.println("Extracted Numeric ID: " + numericOnly);
-
-		// Store in shared variable
-		SharedData.capturedOrderReleaseID = numericOnly;
-		System.out.println("Captured Numeric ID Stored: " + SharedData.capturedOrderReleaseID);
-
-		try (FileWriter fw = new FileWriter("capturedID.txt")) {
-			fw.write(numericOnly);
+			run(page);
 		}
-		System.out.println("✅ Saved to file: " + numericOnly);
-		test.log(Status.PASS, "Captured Numeric ID Stored: " + SharedData.capturedOrderReleaseID);
-		test.log(Status.PASS, "Saved to file: " + SharedData.capturedOrderReleaseID);
 	}
-	public class SharedData {
-		public static String capturedOrderReleaseID; // Public & static for global access
+	private static void run(Page page2) {
+		// TODO Auto-generated method stub
+
 	}
 
-	private String handleAlert(ChromeDriver driver2, boolean b) {
 
+
+
+
+
+	private Locator $(String string) {
+		// TODO Auto-generated method stub
 		return null;
 	}
 
-	@Test(priority = 10)
-	public void handleDynamicCheckboxes() throws InterruptedException {
-		test.log(Status.INFO, "handleDynamicCheckboxes test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
-		// Step 1: Switch to iframe mainIFrame
-		driver.switchTo().defaultContent();
-		wait.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("mainIFrame")));
-		System.out.println("✅ Switched to iframe: mainIFrame");
 
-		// Step 2: Locate the checkbox using the given XPath
-		WebElement checkbox = wait.until(ExpectedConditions.elementToBeClickable(
+	private void ensureAppReady() {
+		// TODO Auto-generated method stub
 
-				//check box xpath 
-
-				//				By.xpath("/html/body/form/div[5]/div/div/div[1]/table[2]/tbody/tr/td[1]/input")
-				//				));       
-
-				By.xpath("/html/body/form/div[5]/div/div/div[1]/table[3]/tbody/tr/td[1]/input")
-				));
-		// Step 3: Click if not already selected
-		if (!checkbox.isSelected()) {
-			checkbox.click();
-			test.log(Status.PASS, "Checkbox clicked successfully!");
-			System.out.println("✔️ Checkbox clicked successfully!");
-		} else {
-			System.out.println("ℹ️ Checkbox already selected.");
-		}
-
-		// Optional: highlight for debugging
-		((JavascriptExecutor) driver).executeScript("arguments[0].style.border='3px solid red'", checkbox);
-
-		Thread.sleep(2000);
-	}
-	@Test(priority = 11)
-	public void Actions() throws InterruptedException {
-		test.log(Status.INFO, "Actions test started");
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
-
-		// ✅ Actions
-		WebElement actionsButton = wait.until(ExpectedConditions.elementToBeClickable(
-				By.xpath("//button[normalize-space(text())='Actions']")));
-		actionsButton.click();
-		test.log(Status.PASS, "Clicked Actions button");
-
-		Thread.sleep(10000);
-		//	logStep("Clicked Actions button");
 	}
 
 
-	@SuppressWarnings("unused")
-	@Test(priority = 12)
-	public void Order_Management_Process() throws InterruptedException {
-		test.log(Status.INFO, "Order_Management_Process test started");
-		// ✅ Order Management
-		WebDriverWait wait1 = new WebDriverWait(driver, Duration.ofSeconds(30));
-
-		try {
-			// 1. ALWAYS start from the main page to avoid confusion.
-			driver.switchTo().defaultContent();
-			System.out.println("Switched to default content.");
-
-			// 2. Switch to the main content frame first.
-			wait1.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("mainIFrame")));
-			System.out.println("Switched to mainIFrame.");
-
-			// 3. NOW, look for the actionFrame. Let's try finding it by ID first.
-			try {
-				wait1.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("actionFrame")));
-				System.out.println("✅ SUCCESS: Switched to actionFrame using ID.");
-			} catch (TimeoutException e) {
-				// 4. If ID fails, try finding it by NAME. This is our most likely fix.
-				System.out.println("Could not find actionFrame by ID, trying by NAME...");
-				wait1.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.name("actionFrame")));
-				System.out.println("✅ SUCCESS: Switched to actionFrame using NAME.");
-			}
-
-			// By now, we should be inside the correct frame.
-
-			// 5. Locate the "Order Management" span you want to click.
-			WebElement orderManagement = wait1.until(
-					ExpectedConditions.visibilityOfElementLocated(By.xpath("//span[@id='actionTree.1_7.l']"))
-					);
-
-			// 6. Click the element.
-			((JavascriptExecutor) driver).executeScript("arguments[0].click();", orderManagement);
-			System.out.println("✅ Clicked on Order Management.");
-
-			Thread.sleep(2000);
-
-		} catch (TimeoutException e) {
-			System.err.println("CRITICAL ERROR: Could not find the 'actionFrame' by ID or Name even after switching to 'mainIFrame'.");
-			// Add page source logging for final debugging if this fails
-			// System.out.println(driver.getPageSource()); 
-			throw e;
-		} finally {
-			// 7. No matter what happens, switch back to the main page.
-			driver.switchTo().defaultContent();
-			System.out.println("Switched back to default content.");
-		}
+	private boolean visible(Locator orderMgmt, int i) {
+		// TODO Auto-generated method stub
+		return false;
+	}
 
 
-		// ✅ Utilities and Copy Order Release (robust frame switching + resilient locators)
-		WebDriverWait wait11 = new WebDriverWait(driver, Duration.ofSeconds(30));
-
-		try {
-			// 1) Always reset to the top-level document
-			driver.switchTo().defaultContent();
-			System.out.println("Switched to default content.");
-
-			// 2) Enter main content frame first
-			wait11.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("mainIFrame")));
-			System.out.println("Switched to mainIFrame.");
-
-			// 3) Enter actionFrame by ID, fallback to NAME
-			try {
-				wait11.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("actionFrame")));
-				System.out.println("✅ SUCCESS: Switched to actionFrame using ID.");
-			} catch (TimeoutException e) {
-				System.out.println("Could not find actionFrame by ID, trying by NAME...");
-				wait11.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.name("actionFrame")));
-				System.out.println("✅ SUCCESS: Switched to actionFrame using NAME.");
-			}
-
-			// 4) Click Utilities (prefer exact id, fallback to text)
-			By utilitiesById = By.xpath("//span[@id='actionTree.1_7_8.l']");
-			By utilitiesByText = By.xpath("//span[normalize-space(text())='Utilities']");
-			WebElement utilitiesEl;
-			try {
-				utilitiesEl = wait11.until(ExpectedConditions.visibilityOfElementLocated(utilitiesById));
-			} catch (TimeoutException e) {
-				utilitiesEl = wait11.until(ExpectedConditions.visibilityOfElementLocated(utilitiesByText));
-			}
-			((JavascriptExecutor) driver).executeScript("arguments[0].click();", utilitiesEl);
-			System.out.println("✔️ Clicked Utilities");
-			Thread.sleep(1000);
-
-			// 5) Click Copy Order Release (prefer stable id, fallback to link text/href)
-			By corById = By.xpath("//a[@id='actionTree.1_7_8_4.k']");
-			By corByText = By.xpath("//a[normalize-space(text())='Copy Order Release']");
-			By corByHref = By.xpath("//a[contains(@href,'copy_order_release')]");
-			WebElement copyOrderReleaseEl;
-			try {
-				copyOrderReleaseEl = wait11.until(ExpectedConditions.elementToBeClickable(corById));
-			} catch (TimeoutException e) {
-				try {
-					copyOrderReleaseEl = wait11.until(ExpectedConditions.elementToBeClickable(corByText));
-				} catch (TimeoutException e2) {
-					copyOrderReleaseEl = wait11.until(ExpectedConditions.elementToBeClickable(corByHref));
-				}
-			}
-			((JavascriptExecutor) driver).executeScript("arguments[0].click();", copyOrderReleaseEl);
-			System.out.println("✔️ Clicked Copy Order Release");
-			Thread.sleep(1000);
-
-		} catch (TimeoutException e) {
-			System.err.println("CRITICAL: Could not reach Utilities/Copy Order Release after robust frame switching.");
-			throw e;
-		} finally {
-			// Optional: return to default content
-			driver.switchTo().defaultContent();
-			System.out.println("Switched back to default content.");
-		}
+	private Locator on(Frame mainFrame, String string, Page page2) {
+		// TODO Auto-generated method stub
+		return null;
+	}
 
 
-		// ✅ Handle new popup window
-		String parentWindow = driver.getWindowHandle();
-		wait11.until(ExpectedConditions.numberOfWindowsToBe(2));
-
-		for (String windowHandle : driver.getWindowHandles()) {
-			if (!windowHandle.equals(parentWindow)) {
-				driver.switchTo().window(windowHandle);
-				break;
-			}
-		}
-
-		driver.manage().window().maximize();
-		System.out.println("✅ Switched to popup window");
-		Thread.sleep(5000);
-		// ✅ ROBUST SHIP UNIT BUTTON CLICK (with null safety)
-		RobustTestHelper helper = null;
-		try {
-			// Initialize helper if not already done
-			if (helper == null) {
-				helper = new RobustTestHelper(driver);
-				System.out.println("Initialized RobustTestHelper");
-			}
-
-			// Wait for popup window to be fully loaded
-			System.out.println("Waiting for popup window to load completely...");
-			if (helper != null) {
-				helper.waitForPageLoad();
-			} else {
-				new WebDriverWait(driver, Duration.ofSeconds(30))
-				.until(webDriver -> ((JavascriptExecutor) webDriver)
-						.executeScript("return document.readyState").equals("complete"));
-			}
-			Thread.sleep(5000);  // Additional wait for dynamic content
-
-			// Debug: Print current window info
-			System.out.println("Current window handle: " + driver.getWindowHandle());
-			System.out.println("Current URL: " + driver.getCurrentUrl());
-			System.out.println("Page title: " + driver.getTitle());
-
-			// Check if we need to switch frames within the popup
-			driver.switchTo().defaultContent(); // Reset to top-level in popup
-
-			// Try to find any iframes in the popup
-			List<WebElement> popupFrames = driver.findElements(By.tagName("iframe"));
-			System.out.println("Found " + popupFrames.size() + " iframes in popup");
-
-			boolean buttonFound = false;
-			WebElement shipUnitButton = null;
-
-			// Strategy 1: Try to find button in main popup content
-			try {
-				System.out.println("Strategy 1: Looking for Ship Unit button in main popup content...");
-				shipUnitButton = wait1.until(ExpectedConditions.elementToBeClickable(
-						By.xpath("//button[normalize-space(text())='Ship Unit']")
-						));
-				buttonFound = true;
-				System.out.println("✅ Found Ship Unit button in main content");
-			} catch (TimeoutException e) {
-				System.out.println("Strategy 1 failed: " + e.getMessage());
-			}
-
-			// Strategy 2: Try alternative locators in main content
-			//			if (!buttonFound && helper != null) {
-			//				try {
-			//					System.out.println("Strategy 2: Trying alternative locators...");
-			//					shipUnitButton = helper.findElementWithFallback(
-			//							By.xpath("//button[@class='enButton' and normalize-space()='Ship Unit']")
-			//							);
-			//					buttonFound = true;
-			//					System.out.println("✅ Found Ship Unit button with alternative locators");
-			//				} catch (Exception e) {
-			//					System.out.println("Strategy 2 failed: " + e.getMessage());
-			//				}
-			//			} else if (!buttonFound) {
-			//				// Fallback without helper
-			//				try {
-			//					System.out.println("Strategy 2 (fallback): Trying basic locators...");
-			//					shipUnitButton = driver.findElement(By.xpath("//button[contains(text(), 'Ship Unit')]"));
-			//					buttonFound = true;
-			//					System.out.println("✅ Found Ship Unit button with basic locator");
-			//				} catch (Exception e) {
-			//					System.out.println("Strategy 2 fallback failed: " + e.getMessage());
-			//				}
-			//			}
-
-			// Strategy 3: Try each iframe in the popup
-			if (!buttonFound && popupFrames.size() > 0) {
-				for (int i = 0; i < popupFrames.size(); i++) {
-					try {
-						System.out.println("Strategy 3: Checking iframe " + (i + 1) + " of " + popupFrames.size());
-						driver.switchTo().frame(popupFrames.get(i));
-						Thread.sleep(1000); // Wait for frame content to load
-
-						try {
-							shipUnitButton = wait1.until(ExpectedConditions.elementToBeClickable(
-									By.xpath("//button[normalize-space(text())='Ship Unit']")
-									));
-							buttonFound = true;
-							System.out.println("✅ Found Ship Unit button in iframe " + (i + 1));
-							break;
-						} catch (TimeoutException e) {
-							// Try alternative locators in this frame
-							try {
-								shipUnitButton = driver.findElement(By.xpath("//button[contains(text(), 'Ship Unit')]"));
-								buttonFound = true;
-								System.out.println("✅ Found Ship Unit button in iframe " + (i + 1) + " with alternative locators");
-								break;
-							} catch (Exception e2) {
-								System.out.println("No Ship Unit button in iframe " + (i + 1));
-							}
-						}
-
-						driver.switchTo().defaultContent(); // Return to popup root
-					} catch (Exception e) {
-						System.out.println("Error checking iframe " + (i + 1) + ": " + e.getMessage());
-						driver.switchTo().defaultContent(); // Ensure we're back at popup root
-					}
-				}
-			}
-
-			// Strategy 4: Debug - print all buttons on the page
-			if (!buttonFound) {
-				System.out.println("Strategy 4: Debugging - printing all buttons on page...");
-				driver.switchTo().defaultContent();
-				List<WebElement> allButtons = driver.findElements(By.xpath("//button | //input[@type='button'] | //input[@type='submit']"));
-				System.out.println("Found " + allButtons.size() + " buttons/inputs on page:");
-
-				for (int i = 0; i < Math.min(allButtons.size(), 10); i++) {
-					try {
-						WebElement btn = allButtons.get(i);
-						String text = btn.getText().trim();
-						String value = btn.getAttribute("value");
-						String className = btn.getAttribute("class");
-						System.out.println("Button " + (i + 1) + ": text='" + text + "', value='" + value + "', class='" + className + "'");
-					} catch (Exception e) {
-						System.out.println("Button " + (i + 1) + ": Error reading attributes - " + e.getMessage());
-					}
-				}
-			}
-
-			if (buttonFound && shipUnitButton != null) {
-				// Scroll to button and click
-				if (helper != null) {
-					helper.scrollToElement(shipUnitButton);
-				} else {
-					((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView(true);", shipUnitButton);
-				}
-				((JavascriptExecutor) driver).executeScript("arguments[0].click();", shipUnitButton);
-				System.out.println("✅ Successfully clicked Ship Unit button");
-
-				// Wait for any processing after Ship Unit click
-				if (helper != null) {
-					helper.waitForPageLoad();
-				} else {
-					Thread.sleep(3000);
-				}
-				Thread.sleep(2000);
-			} else {
-				throw new NoSuchElementException("Could not find Ship Unit button in popup window after trying all strategies");
-			}
-
-		} catch (Exception e) {
-			System.err.println("Failed to click Ship Unit button: " + e.getMessage());
-
-			// Safe error handling - check if helper exists before using it
-			try {
-				if (helper != null) {
-					helper.takeScreenshot("ship_unit_button_failure");
-					helper.debugPageStructure();
-				} else {
-					System.out.println("Helper is null, cannot take screenshot or debug page structure");
+	private Frame pickMainFrameIfAny(Page page2) {
+		// TODO Auto-generated method stub
+		return null;
+	}
 
 
-					System.out.println("Basic screenshot taken");
-				}
-			} catch (Exception debugException) {
-				System.err.println("Failed to take screenshot or debug: " + debugException.getMessage());
-			}
+	private void waitForAppShell(Page page2) {
+		// TODO Auto-generated method stub
 
-			throw e;
-		}
+	}
+	private static final double TIMEOUT1 = 60_000; // ms
 
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(20));
+	@Test(priority = 2)
+	public void In_order_release() throws InterruptedException {
 
-		// safest - using name
-		WebElement finishedButton = wait.until(
-				ExpectedConditions.elementToBeClickable(By.xpath("//button[@class='enButton' and normalize-space(text())='Finished']"))
+		log("In_order_release test started");
+		waitAppReady(page);
+		Thread.sleep(3000); // brief pause to ensure stability
+		// 1) Resolve mainIFrame
+		Frame main = getMainIFrame(page)
+				.orElseThrow(() -> new RuntimeException("mainIFrame not found or not yet attached"));
+		Thread.sleep(3000); // brief pause to ensure stability
+		// 2) Find the frame (main or a child) that contains the Indicator dropdown
+		String indicatorSel = "select[name='order_release/indicator'][aria-label='Indicator']";
+		Frame indicatorFrame = findDescendantFrameWithSelector(main, indicatorSel, 16_000)
+				.orElseThrow(() -> new RuntimeException("Indicator dropdown not found in mainIFrame or its child iframes"));
+		Thread.sleep(3000); // brief pause to ensure stability
+		// 3) Interact with the Indicator dropdown (select second option)
+		Locator indicator = indicatorFrame.locator(indicatorSel);
+		indicator.waitFor(new Locator.WaitForOptions().setTimeout(25_000).setState(WaitForSelectorState.VISIBLE));
+		indicator.scrollIntoViewIfNeeded();
+		// Playwright index is zero-based. 1 = second option.
+		indicator.selectOption(new SelectOption().setIndex(1));
+		log("Dropdown clicked and option selected.");
+		Thread.sleep(3000); // brief pause to ensure stability
+		// 4) Click Search
+		// Try in mainIFrame first; if not found there, search the child frames; final fallback: page
+		BySelectorGroup searchSelectors = new BySelectorGroup(
+				// Native button inside oj-button
+				"oj-button:has-text('Search') >> button",
+				// Common fallbacks
+				"button[aria-label='Search']",
+				"#search",
+				"#search_button",
+				"button:has-text('Search')"
 				);
 
-		finishedButton.click();
-
-		driver.close(); // Close the popup window
-
-		driver.switchTo().window(parentWindow); // Switch back to parent
-
-		// ✅ Step 3: Re-enter ULA frame after popup
-		wait11.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt(By.id("mainIFrame")));
-		WebDriverWait wait111 = new WebDriverWait(driver, Duration.ofSeconds(10));
-		// ✅ Step 4: Click Home
-		try {
-			// ✅ First try with <oj-button> locator
-			WebElement orderReleaseChild = wait.until(
-					ExpectedConditions.elementToBeClickable(
-							By.xpath("//oj-button[@id='homeButton']"))
-					);
-			((JavascriptExecutor) driver).executeScript(
-					"arguments[0].scrollIntoView({block:'center'});", orderReleaseChild);
-			orderReleaseChild.click();
-			System.out.println("✅ Clicked Home button using <oj-button> locator");
-		} catch (Exception e1) {
-			System.out.println("⚠️ Primary locator failed: " + e1.getMessage());
-			try {
-				// ✅ Fallback: use the <button> with aria-labelledby
-				WebElement click = wait.until(
-						ExpectedConditions.elementToBeClickable(
-								By.xpath("//button[@aria-labelledby='homeButton_oj27|text']"))
-						);
-				((JavascriptExecutor) driver).executeScript(
-						"arguments[0].scrollIntoView({block:'center'});", click);
-				click.click();
-				System.out.println("✅ Clicked Home button using fallback locator");
-			} catch (Exception e2) {
-				System.out.println("❌ Home button not found or not clickable: " + e2.getMessage());
+		// (a) Try in mainIFrame
+		if (!clickFirstMatch(main, searchSelectors, 14_000)) {
+			// (b) Try in child frames of mainIFrame
+			boolean clicked = false;
+			for (Frame child : breadthFirst(main)) {
+				if (child == main) continue;
+				if (clickFirstMatch(child, searchSelectors, 8_000)) { clicked = true; break; }
+			}
+			// (c) Fallback: try at page level
+			if (!clicked) {
+				if (!clickFirstMatch(page, searchSelectors, 8_000)) {
+					// Diagnostics before failing
+					page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get("debug_search_full.png")).setFullPage(true));
+					throw new RuntimeException("Search button not found in mainIFrame, its child frames, or page.");
+				}
 			}
 		}
 
-		test.log(Status.PASS, "Clicked Home button");
+		log("Search button clicked successfully.");
 	}
-	@AfterClass
-	public void tearDown() {
-		if (driver != null) {
-			driver.quit();
-			test.log(Status.INFO, "Browser closed and WebDriver quit successfully.");
+
+	// ---------------- helpers ----------------
+
+	private static void waitAppReady(Page page) {
+	    page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+	    page.waitForTimeout(2000); // ✅ Reliable pause for Oracle OTM
+	}
+
+	/** Locate the iframe element with id=mainIFrame and return its content Frame. */
+	private static Optional<Frame> getMainIFrame(Page page) {
+		try {
+			ElementHandle iframeEl = page.waitForSelector("iframe#mainIFrame",
+					new Page.WaitForSelectorOptions().setTimeout(15_000));
+			if (iframeEl == null) return Optional.empty();
+			Frame f = iframeEl.contentFrame();
+			return Optional.ofNullable(f);
+		} catch (PlaywrightException e) {
+			return Optional.empty();
 		}
-		extent.flush(); // Save the report
 	}
+
+	/** BFS over a root frame and its descendants. */
+	private static List<Frame> breadthFirst(Frame root) {
+		List<Frame> order = new ArrayList<>();
+		Deque<Frame> q = new ArrayDeque<>();
+		q.add(root);
+		while (!q.isEmpty()) {
+			Frame f = q.removeFirst();
+			order.add(f);
+			q.addAll(f.childFrames());
+		}
+		return order;
+	}
+
+	/** Find (within root + descendants) the first frame containing selector. */
+	private static Optional<Frame> findDescendantFrameWithSelector(Frame root, String selector, double timeoutMs) {
+		long deadline = System.nanoTime() + (long) (timeoutMs * 1_000_000);
+
+		// Fast pass
+		for (Frame f : breadthFirst(root)) {
+			try {
+				f.waitForSelector(selector, new Frame.WaitForSelectorOptions().setTimeout(400));
+				return Optional.of(f);
+			} catch (PlaywrightException ignore) { }
+			if (System.nanoTime() > deadline) return Optional.empty();
+		}
+
+		// Slow pass
+		for (Frame f : breadthFirst(root)) {
+			try {
+				f.waitForSelector(selector, new Frame.WaitForSelectorOptions().setTimeout(2_500));
+				return Optional.of(f);
+			} catch (PlaywrightException ignore) { }
+			if (System.nanoTime() > deadline) break;
+		}
+		return Optional.empty();
+	}
+
+	/** Tries each selector in order and clicks the first visible & enabled match within the frame. */
+	private static boolean clickFirstMatch(Frame frame, BySelectorGroup selectors, double timeoutMs) {
+		for (String cssOrXPath : selectors.list) {
+			Locator loc = frame.locator(cssOrXPath).first();
+			try {
+				loc.waitFor(new Locator.WaitForOptions().setTimeout(timeoutMs).setState(WaitForSelectorState.VISIBLE));
+			} catch (PlaywrightException ignored) {
+				continue; // try next selector
+			}
+
+			// Ensure clickable (not hidden/disabled/covered)
+			try {
+				// If button-like, wait until enabled
+				frame.waitForFunction("el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')", loc.elementHandle(),
+						new Frame.WaitForFunctionOptions().setTimeout(2_000));
+			} catch (PlaywrightException ignored) { /* not a button or no 'disabled' attr; proceed */ }
+
+			try {
+				loc.scrollIntoViewIfNeeded();
+				loc.click(new Locator.ClickOptions().setTimeout(6_000));
+				return true;
+			} catch (PlaywrightException clickFail) {
+				// Try force click only as a last resort for shadow overlay quirks
+				try {
+					loc.click(new Locator.ClickOptions().setTimeout(3_000).setForce(true));
+					return true;
+				} catch (PlaywrightException ignored) {
+					// move on to next selector
+				}
+			}
+		}
+		return false;
+	}
+
+	/** Page-level overload. */
+	private static boolean clickFirstMatch(Page page, BySelectorGroup selectors, double timeoutMs) {
+		for (String cssOrXPath : selectors.list) {
+			Locator loc = page.locator(cssOrXPath).first();
+			try {
+				loc.waitFor(new Locator.WaitForOptions().setTimeout(timeoutMs).setState(WaitForSelectorState.VISIBLE));
+			} catch (PlaywrightException ignored) {
+				continue;
+			}
+			try {
+				page.waitForFunction("el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')", loc.elementHandle(),
+						new Page.WaitForFunctionOptions().setTimeout(2_000));
+			} catch (PlaywrightException ignored) { }
+
+			try {
+				loc.scrollIntoViewIfNeeded();
+				loc.click(new Locator.ClickOptions().setTimeout(6_000));
+				return true;
+			} catch (PlaywrightException e) {
+				try {
+					loc.click(new Locator.ClickOptions().setTimeout(3_000).setForce(true));
+					return true;
+				} catch (PlaywrightException ignored) { }
+			}
+		}
+		return false;
+	}
+
+	private static void log(String s) { System.out.println(s); }
+
+	// Utility holder for your selector list (CSS or XPath are both fine here)
+	private static class BySelectorGroup {
+		final List<String> list = new ArrayList<>();
+		BySelectorGroup(String... selectors) {
+			list.addAll(Arrays.asList(selectors));
+		}
+	}
+
+
+
+
+
+
+
+	// ----------------- helpers -----------------
+
+	private static void ensureAppReady(Page page) {
+		page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+		page.waitForLoadState(LoadState.NETWORKIDLE);
+	}
+
+	/** Breadth-first search all frames for a frame whose textContent matches the pattern at least once. */
+
+
+
+
+	/** Helps debug: dumps visible headings text quickly. */
+	private static void dumpHeadings(Frame frame, String filename) {
+		try {
+			String js =
+					"(() => {" +
+							" const hs = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role=\"heading\"]')); " +
+							" return hs.map(h => ({tag: h.tagName || 'role=heading', name: (h.innerText||'').trim()}));" +
+							"})()";
+			Object res = frame.evaluate(js);
+			java.nio.file.Files.writeString(Paths.get(filename), String.valueOf(res));
+		} catch (Exception ignored) { }
+	}
+
+
+
+
+
+
+
+
+	// --- Priority 3 ---
+	@Test(priority = 3)
+	public void Order_Releases() throws InterruptedException {
+	    System.out.println("✅ Order_Releases test started");
+	    waitAppReady(page);
+	    // Avoid waiting for page-level load state
+	    page.waitForSelector("iframe", new Page.WaitForSelectorOptions().setTimeout(15_000));
+
+	    // Switch to target frame (first frame or #mainIFrame)
+	    Frame target = getPreferredFrame1(page)
+	        .orElseThrow(() -> new RuntimeException("No suitable iframe found"));
+	    Thread.sleep(3000); // brief pause to ensure stability
+	    // Wait for the table to appear
+	    target.waitForSelector("table", new Frame.WaitForSelectorOptions().setTimeout(15_000));
+
+	    // Step 1: Click link 'ULA/NA' like Selenium does
+	    Thread.sleep(3000); // brief pause to ensure stability
+	    Locator orderLink = target.locator("//a[contains(text(), 'ULA/NA')]").first();
+	    orderLink.scrollIntoViewIfNeeded();
+	    orderLink.waitFor(new Locator.WaitForOptions().setTimeout(5000).setState(WaitForSelectorState.VISIBLE));
+	    orderLink.click(new Locator.ClickOptions().setTimeout(5000));
+	    System.out.println("✅ Clicked ULA/NA link");
+
+	    // Step 2: Click NEW button using exact XPath from Selenium
+	    page.waitForTimeout(1500); // small settle; DO NOT use NETWORKIDLE for Oracle OTM
+
+	 // Try to get #mainIFrame again; if not found, fall back to previous target
+	 Frame scope = getPreferredFrame1(page).orElse(target);Thread.sleep(3000); // brief pause to ensure stability
+
+	 // Find a frame (scope or its descendants) that contains a “New” button
+	 List<String> newSelectors = Arrays.asList(
+	     // Oracle JET host + inner native button
+	     "oj-button:has-text('New') >> button",
+	     "oj-button:has-text('NEW') >> button",
+	     // Common fallbacks
+	     "button[aria-label='New']",
+	     "button:has-text('New')",
+	     "button:has-text('NEW')",
+	     // Very last-resort: case-insensitive text engine
+	     ":text-matches('(?i)^\\s*new\\s*$')"
+	 );
+	 Thread.sleep(3000); // brief pause to ensure stability
+	 // BFS search across scope + descendants
+	 Frame btnFrame = findFirstFrameWithAnySelector(scope, newSelectors, 12_000)
+	     .orElseThrow(() -> new RuntimeException("Could not find a frame containing the NEW button after ULA/NA click"));
+
+	 // Click the first matching selector that’s visible/enabled
+	 boolean clickedNew = clickFirstMatchInFrame(btnFrame, newSelectors, 8_000);
+	 if (!clickedNew) {
+	   // Fallback: try across *all* frames on the page (just in case the button rendered outside main)
+	   Optional<Frame> any = findFirstFrameWithAnySelector(page.mainFrame(), newSelectors, 8_000);
+	   if (any.isPresent()) {
+	     if (!clickFirstMatchInFrame(any.get(), newSelectors, 6_000)) {
+	       throw new RuntimeException("NEW button became visible but couldn’t be clicked.");
+	     }
+	   } else {
+	     // FINAL last-resort: absolute XPATH but **within the btnFrame**, not page
+	     Locator lastResort = btnFrame.locator("xpath=/html/body/div[1]/table/tbody/tr/td[2]/table/tbody/tr/td[3]/div/button");
+	     lastResort.scrollIntoViewIfNeeded();
+	     lastResort.click(new Locator.ClickOptions().setTimeout(5_000));
+	   }
+	 }
+
+	 System.out.println("✅ Clicked on NEW button in Order Releases page");
+	    page.screenshot(new Page.ScreenshotOptions()
+	            .setPath(Paths.get("debug_order_releases.png"))
+	            .setFullPage(true));
+	    for (Frame f : page.frames()) {
+	        System.out.println("Frame: " + f.name() + ", URL: " + f.url());
+	    }
+
+	}
+
+
+	// ---------------- helpers ----------------
+
+	private static Optional<Frame> findFirstFrameWithAnySelector(Frame root, List<String> selectors, double timeoutMs) {
+		  long deadline = System.nanoTime() + (long)(timeoutMs * 1_000_000);
+		  Deque<Frame> q = new ArrayDeque<>();
+		  q.add(root);
+		  while (!q.isEmpty()) {
+		    Frame f = q.removeFirst();
+		    for (String s : selectors) {
+		      try {
+		        f.waitForSelector(s, new Frame.WaitForSelectorOptions().setTimeout(500).setState(WaitForSelectorState.ATTACHED));
+		        return Optional.of(f);
+		      } catch (PlaywrightException ignored) {}
+		    }
+		    q.addAll(f.childFrames());
+		    if (System.nanoTime() > deadline) break;
+		  }
+		  return Optional.empty();
+		}
+
+		private static boolean clickFirstMatchInFrame(Frame frame, List<String> selectors, double timeoutMs) {
+		  for (String s : selectors) {
+		    Locator loc = frame.locator(s).first();
+		    try {
+		      loc.waitFor(new Locator.WaitForOptions().setTimeout(2500).setState(WaitForSelectorState.VISIBLE));
+		      // best-effort enabled check
+		      try {
+		        frame.waitForFunction("el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+		          loc.elementHandle(), new Frame.WaitForFunctionOptions().setTimeout(1500));
+		      } catch (PlaywrightException ignored) {}
+		      loc.scrollIntoViewIfNeeded();
+		      loc.click(new Locator.ClickOptions().setTimeout((int) timeoutMs));
+		      return true;
+		    } catch (PlaywrightException ignore) { /* try next */ }
+		  }
+		  return false;
+		}
+
+	private static void waitPageReady1(Page page) {
+		page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+		// Do NOT wait for NETWORKIDLE — OTM never quiets down
+		page.waitForTimeout(2000); // Optional: small pause for UI stabilization
+	}
+	private static void waitAppReady2(Page page) {
+	    page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+	    page.waitForTimeout(2000); // Enough for Oracle JET to render key UI
+	}
+
+	/** Prefer #mainIFrame; else use the first <iframe> on the page. */
+	private static java.util.Optional<Frame> getPreferredFrame1(Page page) {
+		try {
+			ElementHandle mainEl = page.waitForSelector("iframe#mainIFrame",
+					new Page.WaitForSelectorOptions().setTimeout(5000));
+			if (mainEl != null) {
+				Frame f = mainEl.contentFrame();
+				if (f != null) return java.util.Optional.of(f);
+			}
+		} catch (PlaywrightException ignored) { }
+
+		try {
+			ElementHandle firstIframe = page.waitForSelector("iframe",
+					new Page.WaitForSelectorOptions().setTimeout(5000));
+			if (firstIframe != null) {
+				Frame f = firstIframe.contentFrame();
+				if (f != null) return java.util.Optional.of(f);
+			}
+		} catch (PlaywrightException ignored) { }
+
+		return java.util.Optional.empty();
+	}
+
+	private static boolean isVisible1(Locator loc, double timeoutMs) {
+		try {
+			loc.waitFor(new Locator.WaitForOptions()
+					.setState(WaitForSelectorState.VISIBLE)
+					.setTimeout(timeoutMs));
+			return true;
+		} catch (PlaywrightException e) {
+			return false;
+		}
+	}
+
+	/** Clicks a locator with scroll and enabled wait; tries force click as a last resort. */
+	private static void ensureVisibleAndClick1(Locator loc, String screenshotOnFail) {
+		try {
+			loc.scrollIntoViewIfNeeded();
+			loc.waitFor(new Locator.WaitForOptions()
+					.setTimeout(TIMEOUT)
+					.setState(WaitForSelectorState.VISIBLE));
+
+			// If it's a button-like element, wait until enabled (not disabled/aria-disabled)
+			try {
+				Page p = loc.page();
+				p.waitForFunction("el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+						loc.elementHandle(), new Page.WaitForFunctionOptions().setTimeout(1500));
+			} catch (PlaywrightException ignored) { }
+
+			loc.click(new Locator.ClickOptions().setTimeout(TIMEOUT));
+		} catch (PlaywrightException e) {
+			try {
+				loc.click(new Locator.ClickOptions().setTimeout(4000).setForce(true));
+			} catch (PlaywrightException e2) {
+				Page page = loc.page();
+				page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get(screenshotOnFail)).setFullPage(true));
+				throw e2;
+			}
+		}
+	}
+
+	/** Click a locator safely; returns true if clicked. */
+	private static boolean clickSafely(Frame frame, Locator loc, double timeoutMs) {
+		try {
+			loc.scrollIntoViewIfNeeded();
+			loc.waitFor(new Locator.WaitForOptions()
+					.setTimeout(timeoutMs)
+					.setState(WaitForSelectorState.VISIBLE));
+			try {
+				frame.waitForFunction("el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+						loc.elementHandle(), new Frame.WaitForFunctionOptions().setTimeout(1500));
+			} catch (PlaywrightException ignored) { }
+			loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+			return true;
+		} catch (PlaywrightException e) {
+			try {
+				loc.click(new Locator.ClickOptions().setTimeout(2000).setForce(true));
+				return true;
+			} catch (PlaywrightException ignored) {
+				return false;
+			}
+		}
+	}
+
+	/** Clicks the first selector that resolves to a visible, clickable element within a Frame. */
+	private static boolean clickFirstMatch1(Frame frame, List<String> selectors, double timeoutMs) {
+		for (String s : selectors) {
+			Locator loc = frame.locator(s).first();
+			if (!isVisible1(loc, 800)) continue;
+			if (clickSafely(frame, loc, timeoutMs)) return true;
+		}
+		return false;
+	}
+
+	/** Page-level overload. */
+	private static boolean clickFirstMatch1(Page page, List<String> selectors, double timeoutMs) {
+		for (String s : selectors) {
+			Locator loc = page.locator(s).first();
+			try {
+				loc.waitFor(new Locator.WaitForOptions()
+						.setState(WaitForSelectorState.VISIBLE)
+						.setTimeout(800));
+			} catch (PlaywrightException ignored) { continue; }
+
+			try {
+				page.waitForFunction("el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+						loc.elementHandle(), new Page.WaitForFunctionOptions().setTimeout(1500));
+			} catch (PlaywrightException ignored) { }
+
+			try {
+				loc.scrollIntoViewIfNeeded();
+				loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+				return true;
+			} catch (PlaywrightException e) {
+				try {
+					loc.click(new Locator.ClickOptions().setTimeout(2000).setForce(true));
+					return true;
+				} catch (PlaywrightException ignored) { }
+			}
+		}
+		return false;
+	}
+
+
+
+	// ---------------- helpers ----------------
+
+	private static void waitPageReady(Page page) {
+		page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+		page.waitForLoadState(LoadState.NETWORKIDLE);
+	}
+
+	/** Prefer #mainIFrame; else use the first <iframe> on the page. */
+	private static Optional<Frame> getPreferredFrame(Page page) {
+		// Try #mainIFrame
+		try {
+			ElementHandle mainEl = page.waitForSelector("iframe#mainIFrame",
+					new Page.WaitForSelectorOptions().setTimeout(5_000));
+			if (mainEl != null) {
+				Frame f = mainEl.contentFrame();
+				if (f != null) return Optional.of(f);
+			}
+		} catch (PlaywrightException ignored) { }
+
+		// Fallback: first iframe
+		try {
+			ElementHandle firstIframe = page.waitForSelector("iframe",
+					new Page.WaitForSelectorOptions().setTimeout(5_000));
+			if (firstIframe != null) {
+				Frame f = firstIframe.contentFrame();
+				if (f != null) return Optional.of(f);
+			}
+		} catch (PlaywrightException ignored) { }
+
+		return Optional.empty();
+	}
+
+	private static boolean isVisible(Locator loc, double timeoutMs) {
+		try {
+			loc.waitFor(new Locator.WaitForOptions()
+					.setState(WaitForSelectorState.VISIBLE)
+					.setTimeout(timeoutMs));
+			return true;
+		} catch (PlaywrightException e) {
+			return false;
+		}
+	}
+
+	private static void ensureVisibleAndClick(Locator loc, String screenshotOnFail) {
+		try {
+			loc.scrollIntoViewIfNeeded();
+			loc.waitFor(new Locator.WaitForOptions()
+					.setTimeout(TIMEOUT)
+					.setState(WaitForSelectorState.VISIBLE));
+			loc.click(new Locator.ClickOptions().setTimeout(TIMEOUT));
+		} catch (PlaywrightException e) {
+			try {
+				// Force as last resort (overlay quirks)
+				loc.click(new Locator.ClickOptions().setTimeout(4_000).setForce(true));
+			} catch (PlaywrightException e2) {
+				// Aid debugging
+				Page page = loc.page();
+				page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get(screenshotOnFail)).setFullPage(true));
+				throw e2;
+			}
+		}
+	}
+
+	/** Clicks the first selector that resolves to a visible, clickable element within a Frame. */
+	private static boolean clickFirstMatch(Frame frame, List<String> selectors, double timeoutMs) {
+		for (String s : selectors) {
+			Locator loc = toLocator(frame, s).first();
+			if (!isVisible1(loc, 1_000)) continue;
+			try {
+				// If it's a button, wait until enabled (not disabled/aria-disabled)
+				frame.waitForFunction("el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+						loc.elementHandle(), new Frame.WaitForFunctionOptions().setTimeout(1_500));
+			} catch (PlaywrightException ignored) { }
+			try {
+				loc.scrollIntoViewIfNeeded();
+				loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+				return true;
+			} catch (PlaywrightException ignored) {
+				try {
+					loc.click(new Locator.ClickOptions().setTimeout(2_000).setForce(true));
+					return true;
+				} catch (PlaywrightException ignored2) { }
+			}
+		}
+		return false;
+	}
+
+	/** Page-level overload. */
+	private static boolean clickFirstMatch(Page page, List<String> selectors, double timeoutMs) {
+		for (String s : selectors) {
+			Locator loc = toLocator(page, s).first();
+			if (!isVisible1(loc, 1_000)) continue;
+			try {
+				page.waitForFunction("el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+						loc.elementHandle(), new Page.WaitForFunctionOptions().setTimeout(1_500));
+			} catch (PlaywrightException ignored) { }
+			try {
+				loc.scrollIntoViewIfNeeded();
+				loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+				return true;
+			} catch (PlaywrightException ignored) {
+				try {
+					loc.click(new Locator.ClickOptions().setTimeout(2_000).setForce(true));
+					return true;
+				} catch (PlaywrightException ignored2) { }
+			}
+		}
+		return false;
+	}
+
+	/** Accepts either CSS/XPath or role selector strings. */
+	private static Locator toLocator(Frame frame, String selector) {
+		if (selector.startsWith("role=")) {
+			// role=button[name='New'] style
+			return roleLocator(frame, selector);
+		}
+		// CSS or XPath both supported by .locator()
+		return frame.locator(selector);
+	}
+
+	private static Locator toLocator(Page page, String selector) {
+		if (selector.startsWith("role=")) {
+			return roleLocator((Frame) page, selector);
+		}
+		return page.locator(selector);
+	}
+
+	/** Minimal parser for role selectors like role=button[name='New'] */
+	private static Locator roleLocator(Frame frame, String roleSelector) {
+		// Very small parser: role=button[name='New']  -> role=button, name='New'
+		String rs = roleSelector.substring("role=".length());
+		String role = rs.split("\\[", 2)[0].trim();
+		String name = null;
+		if (rs.contains("name=")) {
+			int i = rs.indexOf("name=");
+			int start = rs.indexOf('\'', i) >= 0 ? rs.indexOf('\'', i) + 1 : rs.indexOf('"', i) + 1;
+			int end = rs.indexOf('\'', start) >= 0 ? rs.indexOf('\'', start) : rs.indexOf('"', start);
+			name = rs.substring(start, end);
+		}
+		if (frame instanceof Page) {
+			Page p = (Page) frame;
+			if (name != null) {
+				return p.getByRole(toAriaRole(role), new Page.GetByRoleOptions().setName(name));
+			}
+			return p.getByRole(toAriaRole(role));
+		} else if (frame instanceof Frame) {
+			Frame f = (Frame) frame;
+			if (name != null) {
+				return f.getByRole(toAriaRole(role), new Frame.GetByRoleOptions().setName(name));
+			}
+			return f.getByRole(toAriaRole(role));
+		}
+		throw new IllegalArgumentException("Unsupported Locatable for roleLocator");
+	}
+
+	private static AriaRole toAriaRole(String s) {
+		switch (s.toLowerCase()) {
+		case "button": return AriaRole.BUTTON;
+		case "link": return AriaRole.LINK;
+		case "heading": return AriaRole.HEADING;
+		default: throw new IllegalArgumentException("Unsupported role: " + s);
+		}
+	}
+
+	/** Marker interface to allow roleLocator over Page/Frame. */
+	private interface Locatable { }
+	private static final double TIMEOUT3 = 20_000; // ms
+
+  // --- Priority 4 ---
+@Test(priority = 4)
+public void Order_Manager_Playwright() {
+  test.log(Status.INFO, "Order_Manager test started");
+
+  // 0) Light-weight settle (OTM/Oracle JET rarely hits NETWORKIDLE)
+  page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+  page.waitForSelector("iframe", new Page.WaitForSelectorOptions().setTimeout(15_000));
+
+  // ===== 1) Domain Name dropdown -> "ULA/NA" =====
+  String domainSel = "select[aria-label='Domain Name']";
+  Frame domainFrame = findFirstFrameWithSelector(page, domainSel, 12_000)
+      .orElseThrow(() -> new RuntimeException("Domain Name dropdown not found in any frame"));
+
+  Locator domain = domainFrame.locator(domainSel);
+  domain.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(8_000));
+  domain.scrollIntoViewIfNeeded();
+  domain.selectOption(new SelectOption().setLabel("ULA/NA"));
+
+  // Verify selected text (closest equivalent to Selenium Select#getFirstSelectedOption)
+  String domainSelectedText = domain.locator("option:checked").innerText().trim();
+  test.log(Status.PASS, "Selected Domain: " + domainSelectedText);
+
+  // ===== 2) Dates =====
+  java.time.LocalDate today = java.time.LocalDate.now();
+
+  String earlyPickup = today.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 00:00:00";
+  String latePickup  = today.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 23:59:00";
+  String earlyDelivery = today.plusDays(10).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 00:00:00";
+  String lateDelivery  = today.plusDays(10).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")) + " 23:59:00";
+
+  // Each input may live in a different iframe; resolve frame per field robustly.
+
+  // Early Pickup Date
+  fillAriaDate(page, "Early Pickup Date", earlyPickup);
+  test.log(Status.PASS, "Entered Early Pickup Date: " + earlyPickup);
+
+  // Late Pickup Date
+  fillAriaDate(page, "Late Pickup Date", latePickup);
+  test.log(Status.PASS, "Entered Late Pickup Date: " + latePickup);
+
+  // Early Delivery Date
+  fillAriaDate(page, "Early Delivery Date", earlyDelivery);
+  test.log(Status.PASS, "Entered Early Delivery Date: " + earlyDelivery);
+
+  // Late Delivery Date
+  fillAriaDate(page, "Late Delivery Date", lateDelivery);
+  test.log(Status.PASS, "Entered Late Delivery Date: " + lateDelivery);
+
+  // ===== 3) Order Configuration -> "SHIP_UNITS" =====
+  String orderCfgSel = "select[aria-label='Order Configuration']";
+  Frame cfgFrame = findFirstFrameWithSelector(page, orderCfgSel, 12_000)
+      .orElseThrow(() -> new RuntimeException("Order Configuration dropdown not found in any frame"));
+
+  Locator orderCfg = cfgFrame.locator(orderCfgSel);
+  orderCfg.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(8_000));
+  orderCfg.scrollIntoViewIfNeeded();
+  orderCfg.selectOption(new SelectOption().setLabel("SHIP_UNITS"));
+  test.log(Status.PASS, "Selected Order Configuration: " +
+      orderCfg.locator("option:checked").innerText().trim());
+
+  // ===== 4) Source Location ID (Selenium tried id first, then aria-label fallback) =====
+  // First try exact id = "order_release/source/xid" (use XPath because of slashes in id)
+  Optional<Frame> sourceIdFrame = findFirstFrameWithSelector(page, "xpath=//*[@id='order_release/source/xid']", 8_000);
+  if (sourceIdFrame.isPresent()) {
+    Locator src = sourceIdFrame.get().locator("xpath=//*[@id='order_release/source/xid']");
+    src.waitFor(new Locator.WaitForOptions().setTimeout(5_000).setState(WaitForSelectorState.VISIBLE));
+    src.scrollIntoViewIfNeeded();
+    clearAndType(src, "USO4", true);
+  } else {
+    // Fallback by aria-label
+    String srcAriaSel = "input[aria-label='Source Location ID']";
+    Frame srcAriaFrame = findFirstFrameWithSelector(page, srcAriaSel, 8_000)
+        .orElseThrow(() -> new RuntimeException("Neither id=order_release/source/xid nor 'Source Location ID' found in any frame"));
+    Locator src = srcAriaFrame.locator(srcAriaSel);
+    src.waitFor(new Locator.WaitForOptions().setTimeout(5_000).setState(WaitForSelectorState.VISIBLE));
+    src.scrollIntoViewIfNeeded();
+    clearAndType(src, "USO4", true);
+  }
+
+  test.log(Status.PASS, "Entered Source Location ID: USO4");
+
+  // Optional: small stabilization + diagnostics
+  page.waitForTimeout(500);
+  page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get("order_manager_pw.png")).setFullPage(true));
 }
+
+@Test(priority = 5)
+public void Order_Manager1_Playwright() throws InterruptedException {
+  test.log(Status.INFO, "Order_Manager1 test started");
+
+  // --- Accept any alert/dialog (equiv. to handleAlert(driver, true)) ---
+  page.onceDialog(dialog -> {
+    try { dialog.accept(); } catch (Exception ignored) {}
+  });
+
+  // Settle just a bit; Oracle JET doesn’t truly idle
+  page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+  page.waitForSelector("iframe", new Page.WaitForSelectorOptions().setTimeout(15_000));
+
+  // ===== 1) DESTINATION LOCATION FIELD =====
+  // We’ll try multiple selectors: name, id (via XPath), and aria-label fallback.
+  String byNameSel = "input[name='order_release/destination/xid']";
+  String byIdXPath = "xpath=//*[@id='order_release/destination/xid']";
+  String byAriaSel = "input[aria-label='Destination Location ID']";
+
+  Locator destInput = null;
+
+  // Try by name
+  Optional<Frame> fName = findFirstFrameWithSelector(page, byNameSel, 8_000);
+  if (fName.isPresent()) {
+    destInput = fName.get().locator(byNameSel).first();
+  } else {
+    // Try by id (XPath because id contains slashes)
+    Optional<Frame> fId = findFirstFrameWithSelector(page, byIdXPath, 8_000);
+    if (fId.isPresent()) {
+      destInput = fId.get().locator(byIdXPath).first();
+    } else {
+      // Fallback: aria-label
+      Optional<Frame> fAria = findFirstFrameWithSelector(page, byAriaSel, 8_000);
+      if (fAria.isPresent()) {
+        destInput = fAria.get().locator(byAriaSel).first();
+      }
+    }
+  }
+
+  if (destInput == null) {
+    throw new RuntimeException("Destination Location input not found in any frame (by name/id/aria-label).");
+  }
+
+  // Make it visible & fill; use gentle typing and TAB to commit in Oracle forms
+  destInput.waitFor(new Locator.WaitForOptions().setTimeout(15_000).setState(WaitForSelectorState.VISIBLE));
+  destInput.scrollIntoViewIfNeeded();
+  clearAndType(destInput, "USB6", true);    // first try like your Selenium flow
+  // If you want to mimic your fallback overwrite with "USC6", uncomment below:
+  // clearAndType(destInput, "USC6", true);
+
+  test.log(Status.PASS, "Destination Location entered");
+
+  // ===== 2) Click the two buttons (absolute XPaths in Selenium) =====
+  // /html/body/div[6]/table/tbody/tr/td[2]/div/button
+  clickXPathAnywhere1(page, "/html/body/div[6]/table/tbody/tr/td[2]/div/button", 15_000);
+  Thread.sleep(4000);
+
+  // /html/body/form/div[3]/div/div[1]/table/tbody/tr[5]/td/table/tbody/tr/td/div/button
+  clickXPathAnywhere1(page, "/html/body/form/div[3]/div/div[1]/table/tbody/tr[5]/td/table/tbody/tr/td/div/button", 15_000);
+  Thread.sleep(4000);
+
+  // Optional diagnostics
+  page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get("order_manager1_pw.png")).setFullPage(true));
+}
+
+
+
+@Test(priority = 6)
+public void Order_Manager2_Playwright() {
+  test.log(Status.INFO, "Order_Manager2 test started");
+
+  // Light settle; Oracle JET rarely hits true NETWORKIDLE
+  page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+  page.waitForSelector("iframe", new Page.WaitForSelectorOptions().setTimeout(15_000));
+
+  // Transport Handling Unit
+  fillAriaInputAcrossFrames11(page, "Transport Handling Unit", "BOX_000000000084172226", true);
+
+  // Transport Handling Unit Count
+  fillAriaInputAcrossFrames11(page, "Transport Handling Unit Count", "20", false);
+
+  // Total Gross Weight
+  fillAriaInputAcrossFrames11(page, "Total Gross Weight", "20400", false);
+
+  // Scroll to bottom (page-level is fine)
+  page.evaluate("window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' })");
+
+  // Click "New Line Item" (class + exact text)
+  boolean clicked = clickAcrossFrames11(
+      page,
+      Arrays.asList("button.enButton:has-text('New Line Item')", "button:has-text('New Line Item')"),
+      15_000
+  );
+  if (!clicked) throw new RuntimeException("Failed to click 'New Line Item'.");
+
+  test.log(Status.PASS, "Clicked New Line Item button in Order Manager");
+
+  // Optional diagnostics
+  page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get("order_manager2_pw.png")).setFullPage(true));
+}
+
+/* ----------------------- helpers ----------------------- */
+
+/** Finds an input by aria-label across frames and fills it. Optionally presses Tab to commit. */
+private void fillAriaInputAcrossFrames11(Page page, String ariaLabel, String value, boolean tabOut) {
+  String sel = "input[aria-label='" + ariaLabel + "']";
+
+  Frame frame = findFirstFrameWithSelector(page, sel, 12_000)
+      .orElseThrow(() -> new RuntimeException("Input with aria-label '" + ariaLabel + "' not found in any frame"));
+
+  Locator input = frame.locator(sel).first();
+  input.waitFor(new Locator.WaitForOptions().setTimeout(8_000).setState(WaitForSelectorState.VISIBLE));
+  input.scrollIntoViewIfNeeded();
+
+  // Robust clear (JET sometimes ignores plain fill(""))
+  try { input.fill(""); } catch (PlaywrightException ignored) {}
+  input.click(new Locator.ClickOptions().setTimeout(3_000));
+  input.press("Control+A");
+  input.press("Delete");
+
+  // Gentle typing helps Oracle formatters
+  input.type(value, new Locator.TypeOptions().setDelay(10));
+  if (tabOut) input.press("Tab");
+}
+
+/** Clicks the first visible element matching any selector across page & frames. */
+private boolean clickAcrossFrames11(Page page, List<String> selectors, int timeoutMs) {
+  // Try top-level page first
+  for (String s : selectors) {
+    Locator loc = page.locator(s).first();
+    if (isVisibleQuick1111(loc, 1500)) return safeClick111(loc, timeoutMs);
+  }
+  // Try each frame
+  for (Frame f : page.frames()) {
+    for (String s : selectors) {
+      Locator loc = f.locator(s).first();
+      if (isVisibleQuick1111(loc, 1500)) return safeClick111(loc, timeoutMs);
+    }
+  }
+  // Small settle and retry (late-rendered frames)
+  page.waitForTimeout(1000);
+  for (Frame f : page.frames()) {
+    for (String s : selectors) {
+      Locator loc = f.locator(s).first();
+      if (isVisibleQuick1111(loc, 1500)) return safeClick111(loc, timeoutMs);
+    }
+  }
+  return false;
+}
+
+private boolean isVisibleQuick1111(Locator loc, int ms) {
+  try {
+    loc.waitFor(new Locator.WaitForOptions().setTimeout(ms).setState(WaitForSelectorState.VISIBLE));
+    return true;
+  } catch (PlaywrightException ignored) { return false; }
+}
+
+/** Click with enabled check + force fallback for Oracle JET quirks. */
+private boolean safeClick111(Locator loc, int timeoutMs) {
+  loc.scrollIntoViewIfNeeded();
+  try {
+    loc.page().waitForFunction(
+        "el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+        loc.elementHandle(),
+        new Page.WaitForFunctionOptions().setTimeout(1500));
+  } catch (PlaywrightException ignored) { /* not all elements expose disabled */ }
+
+  try {
+    loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+    return true;
+  } catch (PlaywrightException e) {
+    try {
+      loc.click(new Locator.ClickOptions().setTimeout(Math.max(2000, timeoutMs / 2)).setForce(true));
+      return true;
+    } catch (PlaywrightException ignored) {
+      return false;
+    }
+  }
+}
+
+
+
+
+@Test(priority = 7)
+public void Ship_Unit_Line_Playwright() throws InterruptedException {
+  test.log(Status.INFO, "Ship_Unit_Line test started");
+
+  // Light settle (Oracle JET rarely hits NETWORKIDLE)
+  page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+  page.waitForSelector("iframe", new Page.WaitForSelectorOptions().setTimeout(15_000));
+
+  // 1) Fill inputs (by aria-label) across frames
+  // Packaged Item ID
+  fillAriaInputAcrossFrames11(page, "Packaged Item ID", "000000000020005492", true);
+  page.waitForTimeout(2000);
+
+  // Item ID
+  fillAriaInputAcrossFrames11(page, "Item ID", "000000000068441373", true);
+  page.waitForTimeout(2000);
+
+  // Total Package Count
+  fillAriaInputAcrossFrames11(page, "Total Package Count", "20", false);
+  page.waitForTimeout(2000);
+
+  // Packaging Unit
+  fillAriaInputAcrossFrames11(page, "Packaging Unit", "BOX_000000000084172488", true);
+  page.waitForTimeout(2000);
+
+  // Gross Weight
+  fillAriaInputAcrossFrames11(page, "Gross Weight", "20400", false);
+  page.waitForTimeout(2000);
+
+  // Gross Volume
+  fillAriaInputAcrossFrames11(page, "Gross Volume", "2380", false);
+  page.waitForTimeout(2000);
+
+  // Special Service (transport)
+  fillAriaInputAcrossFrames11(page, "Special Service", "TRANSPORT", true);
+  page.waitForTimeout(2000);
+
+  // 2) Click transport Save (normalize-space()='Save')
+  //    Your Selenium XPath: //button[normalize-space()='Save']
+  boolean clickedTransportSave = clickAcrossFrames11(
+      page,
+      Arrays.asList("xpath=//button[normalize-space()='Save']"),
+      15_000
+  );
+  if (!clickedTransportSave) {
+    throw new RuntimeException("Could not click transport Save button.");
+  }
+
+  // 3) Click main Save (onclick contains checkPiForItem() and text()='Save')
+  boolean clickedMainSave = clickAcrossFrames11(
+      page,
+      Arrays.asList("xpath=//button[contains(@onclick,'checkPiForItem()') and normalize-space()='Save']"),
+      15_000
+  );
+  if (!clickedMainSave) {
+    throw new RuntimeException("Could not click main Save (checkPiForItem) button.");
+  }
+
+  // Wait similar to your Thread.sleep
+  page.waitForTimeout(6000);
+
+  // 4) Scroll to bottom (page-level is fine)
+  page.evaluate("window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' })");
+
+  // 5) Accept any alert/dialog that may appear (equivalent to handleAlert(driver, true))
+  page.onceDialog(dialog -> {
+    try { dialog.accept(); } catch (Exception ignored) {}
+  });
+
+  // 6) Click "Save" with onclick contains 'checkData'
+  boolean clickedSaveCheckData = clickAcrossFrames11(
+      page,
+      Arrays.asList("xpath=//button[contains(@onclick,'checkData') and normalize-space()='Save']"),
+      15_000
+  );
+  if (!clickedSaveCheckData) {
+    throw new RuntimeException("Could not click Save button with onclick containing 'checkData'.");
+  }
+
+  page.waitForTimeout(4000);
+
+  // 7) Click "Line Item" button
+  boolean clickedLineItem = clickAcrossFrames11(
+      page,
+      Arrays.asList("xpath=//button[normalize-space(.)='Line Item']"),
+      15_000
+  );
+  if (!clickedLineItem) {
+    throw new RuntimeException("Could not click 'Line Item' button.");
+  }
+
+  page.waitForTimeout(2000);
+  test.log(Status.PASS, "Clicked Save and Line Item buttons in Ship Unit Line");
+
+  // Optional diagnostics
+  page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get("ship_unit_line_pw.png")).setFullPage(true));
+}
+
+
+@Test(priority = 8)
+public void Ship_Unit_Line1_Playwright() throws InterruptedException {
+  test.log(Status.INFO, "Ship_Unit_Line1 test started");
+
+  page.onceDialog(d -> { try { d.accept(); } catch (Exception ignored) {} });
+  page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+  page.waitForSelector("iframe", new Page.WaitForSelectorOptions().setTimeout(15_000));
+
+  // Involved Parties
+  if (!clickAcrossFrames11(page,
+      Arrays.asList("xpath=//button[normalize-space(.)='Involved Parties']"), 15_000)) {
+    throw new RuntimeException("Could not click 'Involved Parties' button.");
+  }
+  page.waitForTimeout(2000);
+
+  // Involved Party Contact
+  fillAriaInputAcrossFrames11(page, "Involved Party Contact", "NA_USO4_OB_PLANNER", false);
+
+  // 1st "Involved Party Qualifier ID" -> select value LOGISTICS
+  selectByAriaAcrossFrames(page, "Involved Party Qualifier ID", "LOGISTICS", null);
+  page.waitForTimeout(1200);
+  Thread.sleep(5000); // brief pause to ensure stability
+  // Verify hidden field updated (works for hidden inputs)
+  String hiddenSelector = "xpath=//input[@name='display_contact_order_release_inv_party/involved_party_qual/xid']";
+  String hiddenValue = getInputValueAcrossFrames(page, hiddenSelector, 8_000);
+  System.out.println("Captured hidden value: " + hiddenValue);
+
+  // Save (enButton Save)
+  if (!clickAcrossFrames11(page,
+      Arrays.asList(
+        "xpath=//button[@class='enButton' and normalize-space(text())='Save']",
+        "xpath=//button[normalize-space()='Save']"),
+      15_000)) {
+    throw new RuntimeException("Could not click Save after first qualifier.");
+  }
+  Thread.sleep(3000); // brief pause to ensure stability
+  // Involved Party Location
+  fillAriaInputAcrossFrames11(page, "Involved Party Location", "USI2", false);
+  page.waitForTimeout(1200);
+  Thread.sleep(3000); // brief pause to ensure stability
+  // 2nd "Involved Party Qualifier ID" (use :nth-match)
+  selectByAriaAcrossFramesWithIndex(page, "Involved Party Qualifier ID", 2,
+      "SERVPROV.0030001584", "LOGISTICS");
+  Thread.sleep(3000); // brief pause to ensure stability
+  String selected2 = getSelectedTextForAriaWithIndex(page, "Involved Party Qualifier ID", 2, 8_000);
+  System.out.println("Selected (second dropdown): " + selected2);
+
+  // Verify hidden again
+  String hiddenValue2 = getInputValueAcrossFrames(page, hiddenSelector, 8_000);
+  System.out.println("Selected qualifier value (hidden): " + hiddenValue2);
+
+  // Final button via absolute XPath (keep as-is)
+  clickXPathAnywhere1(page, "/html/body/form/div[3]/div/div[3]/table/tbody/tr[1]/th[4]/table/tbody/tr/td/div/button", 15_000);
+
+  test.log(Status.PASS, "Ship_Unit_Line1 finished successfully");
+  page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get("ship_unit_line1_pw.png")).setFullPage(true));
+}
+
+
+
+@Test(priority = 9)
+public void Ship_Unit_Line2_Playwright() throws Exception {
+  test.log(Status.INFO, "Ship_Unit_Line2 test started");
+
+  page.onceDialog(d -> { try { d.accept(); } catch (Exception ignored) {} });
+  page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+  page.waitForSelector("iframe", new Page.WaitForSelectorOptions().setTimeout(15_000));
+
+  // Other Attributes
+  if (!clickAcrossFrames11(page,
+      Arrays.asList("xpath=//button[normalize-space(text())='Other Attributes']"),
+      15_000)) {
+    throw new RuntimeException("Could not click 'Other Attributes'.");
+  }
+  page.waitForTimeout(1500);
+
+  // Finished
+  if (!clickAcrossFrames11(page,
+      Arrays.asList("xpath=//button[normalize-space(text())='Finished']"),
+      15_000)) {
+    throw new RuntimeException("Could not click 'Finished'.");
+  }
+  page.waitForTimeout(3500);
+
+  // Capture value: try your absolute XPATH first, then fallback pattern
+  String spanXPath = "/html/body/form/div[5]/div/div/div[1]/table[3]/tbody/tr/td[2]/span";
+  String capturedValue = getTextAcrossFramesByXPath(page, spanXPath, 12_000).trim();
+  System.out.println("Captured Value: " + capturedValue);
+
+  // Extract only digits
+  String numericOnly = capturedValue.replaceAll("[^0-9]", "");
+  System.out.println("Extracted Numeric ID: " + numericOnly);
+
+  // Share & persist
+  SharedData.capturedOrderReleaseID = numericOnly;
+  java.nio.file.Files.writeString(java.nio.file.Paths.get("capturedID.txt"), numericOnly);
+  System.out.println("✅ Saved to file: " + numericOnly);
+
+  test.log(Status.PASS, "Captured Numeric ID Stored: " + SharedData.capturedOrderReleaseID);
+  test.log(Status.PASS, "Saved to file: " + SharedData.capturedOrderReleaseID);
+
+  page.screenshot(new Page.ScreenshotOptions().setPath(Paths.get("ship_unit_line2_pw.png")).setFullPage(true));
+}
+
+
+/* ======================= helpers ======================= */
+
+/** Clicks the first visible element matching any selector across page & frames. */
+private boolean clickAcrossFrames1(Page page, java.util.List<String> selectors, int timeoutMs) {
+  // Try top-level page first
+  for (String s : selectors) {
+    Locator loc = page.locator(s).first();
+    if (isVisibleQuick1111(loc, 1500)) return safeClick111(loc, timeoutMs);
+  }
+  // Try each frame
+  for (Frame f : page.frames()) {
+    for (String s : selectors) {
+      Locator loc = f.locator(s).first();
+      if (isVisibleQuick1111(loc, 1500)) return safeClick111(loc, timeoutMs);
+    }
+  }
+  // Small settle and retry (late-rendered frames)
+  page.waitForTimeout(1000);
+  for (Frame f : page.frames()) {
+    for (String s : selectors) {
+      Locator loc = f.locator(s).first();
+      if (isVisibleQuick1111(loc, 1500)) return safeClick111(loc, timeoutMs);
+    }
+  }
+  return false;
+}
+
+/** Returns innerText of an element found by absolute XPath across page or any frame. */
+/** Returns innerText for an element by absolute XPath; falls back to pattern search if layout shifts. */
+private String getTextAcrossFramesByXPath(Page page, String absXPath, int timeoutMs) {
+  String sel = "xpath=" + absXPath;
+
+  for (int pass = 0; pass < 2; pass++) {
+    // Try page
+    Locator p = page.locator(sel);
+    try {
+      p.waitFor(new Locator.WaitForOptions().setTimeout(1000).setState(WaitForSelectorState.ATTACHED));
+      return p.innerText().trim();
+    } catch (PlaywrightException ignored) {}
+
+    // Try frames
+    for (Frame f : page.frames()) {
+      Locator l = f.locator(sel);
+      try {
+        l.waitFor(new Locator.WaitForOptions().setTimeout(1000).setState(WaitForSelectorState.ATTACHED));
+        return l.innerText().trim();
+      } catch (PlaywrightException ignored) {}
+    }
+    page.waitForTimeout(800);
+  }
+
+  // Fallback: find span with UPPER/UPPER.NUMERIC pattern (e.g., ULA/NA.0410858884)
+  for (Frame f : page.frames()) {
+    String val = (String) f.evaluate("() => {" +
+      "const rx = /^[A-Z]+\\/[A-Z]+\\.[0-9]+$/;" +
+      "for (const s of Array.from(document.querySelectorAll('span'))) {" +
+      "  const t = (s.textContent||'').trim();" +
+      "  if (rx.test(t)) return t;" +
+      "} return null; }");
+    if (val != null && !val.isEmpty()) return val.trim();
+  }
+
+  throw new RuntimeException("Element not found (and fallback failed) for XPath: " + absXPath);
+}
+private Frame resolveMainIFrameOrThrow(Page page, int timeoutMs) {
+	  page.waitForSelector("iframe#mainIFrame", new Page.WaitForSelectorOptions().setTimeout(timeoutMs));
+	  ElementHandle el = page.querySelector("iframe#mainIFrame");
+	  if (el == null) throw new RuntimeException("mainIFrame not found");
+	  Frame f = el.contentFrame();
+	  if (f == null) throw new RuntimeException("Could not resolve contentFrame for mainIFrame");
+	  return f;
+	}
+
+
+
+private boolean isVisibleQuick111(Locator loc, int ms) {
+  try {
+    loc.waitFor(new Locator.WaitForOptions().setTimeout(ms).setState(WaitForSelectorState.VISIBLE));
+    return true;
+  } catch (PlaywrightException ignored) { return false; }
+}
+
+/** Click with enabled check + force fallback for Oracle JET quirks. */
+private boolean safeClick1111(Locator loc, int timeoutMs) {
+  loc.scrollIntoViewIfNeeded();
+  try {
+    loc.page().waitForFunction(
+        "el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+        loc.elementHandle(),
+        new Page.WaitForFunctionOptions().setTimeout(1500));
+  } catch (PlaywrightException ignored) { /* not all elements expose disabled */ }
+
+  try {
+    loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+    return true;
+  } catch (PlaywrightException e) {
+    try {
+      loc.click(new Locator.ClickOptions().setTimeout(Math.max(2000, timeoutMs / 2)).setForce(true));
+      return true;
+    } catch (PlaywrightException ignored) {
+      return false;
+    }
+  }
+}
+
+
+
+/* ======================= helpers ======================= */
+
+/** Finds an input by aria-label across frames and fills it. Optionally presses Tab to commit. */
+private void fillAriaInputAcrossFrames1(Page page, String ariaLabel, String value, boolean tabOut) {
+  String sel = "input[aria-label='" + ariaLabel + "']";
+  Frame frame = findFirstFrameWithSelector(page, sel, 12_000)
+      .orElseThrow(() -> new RuntimeException("Input with aria-label '" + ariaLabel + "' not found in any frame"));
+
+  Locator input = frame.locator(sel).first();
+  input.waitFor(new Locator.WaitForOptions().setTimeout(8_000).setState(WaitForSelectorState.VISIBLE));
+  input.scrollIntoViewIfNeeded();
+
+  try { input.fill(""); } catch (PlaywrightException ignored) {}
+  input.click(new Locator.ClickOptions().setTimeout(3_000));
+  input.press("Control+A");
+  input.press("Delete");
+  input.type(value, new Locator.TypeOptions().setDelay(10)); // gentle typing helps JET
+  if (tabOut) input.press("Tab");
+}
+
+/** Select by aria-label across frames; prefer value then fallback to visible text (label). */
+private void selectByAriaAcrossFrames(Page page, String ariaLabel, String value, String labelFallback) {
+  String sel = "select[aria-label='" + ariaLabel + "']";
+  Frame frame = findFirstFrameWithSelector(page, sel, 12_000)
+      .orElseThrow(() -> new RuntimeException("Select '" + ariaLabel + "' not found in any frame"));
+
+  Locator dropdown = frame.locator(sel).first();
+  dropdown.waitFor(new Locator.WaitForOptions().setTimeout(8_000).setState(WaitForSelectorState.VISIBLE));
+  dropdown.scrollIntoViewIfNeeded();
+
+  boolean selected = false;
+  if (value != null) {
+    try {
+      dropdown.selectOption(new SelectOption().setValue(value));
+      selected = true;
+    } catch (PlaywrightException ignore) {}
+  }
+  if (!selected && labelFallback != null) {
+    dropdown.selectOption(new SelectOption().setLabel(labelFallback));
+  }
+}
+
+/** Same as above, but targets the Nth occurrence (1-based) when multiple selects share the same aria-label. */
+private void selectByAriaAcrossFramesWithIndex(Page page, String ariaLabel, int index1Based, String value, String labelFallback) {
+  String nth = ":nth-match(select[aria-label='" + ariaLabel + "']," + index1Based + ")";
+  // Try page-level
+  Locator pageLoc = page.locator(nth).first();
+  if (isVisibleQuick1111(pageLoc, 1000)) {
+    selectWithFallback(pageLoc, value, labelFallback);
+    return;
+  }
+  // Try frames
+  for (Frame f : page.frames()) {
+    Locator loc = f.locator(nth).first();
+    if (isVisibleQuick1111(loc, 1200)) {
+      selectWithFallback(loc, value, labelFallback);
+      return;
+    }
+  }
+  // Retry late-render
+  page.waitForTimeout(800);
+  for (Frame f : page.frames()) {
+    Locator loc = f.locator(nth).first();
+    if (isVisibleQuick1111(loc, 1200)) {
+      selectWithFallback(loc, value, labelFallback);
+      return;
+    }
+  }
+  throw new RuntimeException("Select '" + ariaLabel + "' occurrence #" + index1Based + " not found.");
+}
+
+private void selectWithFallback(Locator dropdown, String value, String labelFallback) {
+  dropdown.scrollIntoViewIfNeeded();
+  dropdown.waitFor(new Locator.WaitForOptions().setTimeout(8_000).setState(WaitForSelectorState.VISIBLE));
+  boolean selected = false;
+  if (value != null) {
+    try {
+      dropdown.selectOption(new SelectOption().setValue(value));
+      selected = true;
+    } catch (PlaywrightException ignore) {}
+  }
+  if (!selected && labelFallback != null) {
+    dropdown.selectOption(new SelectOption().setLabel(labelFallback));
+  }
+}
+
+/** Returns the .value of an <input> found across page/frames. */
+/** Returns the .value of an <input> found across page/frames (works for hidden/readonly inputs). */
+private String getInputValueAcrossFrames(Page page, String selector, int timeoutMs) {
+  long deadline = System.currentTimeMillis() + timeoutMs;
+
+  for (int pass = 0; pass < 2; pass++) {
+    // Page scope
+    Locator p = page.locator(selector).first();
+    try {
+      p.waitFor(new Locator.WaitForOptions()
+          .setTimeout(800)
+          .setState(WaitForSelectorState.ATTACHED)); // not VISIBLE
+      return p.inputValue();
+    } catch (PlaywrightException ignored) {}
+
+    // Frames scope
+    for (Frame f : page.frames()) {
+      Locator l = f.locator(selector).first();
+      try {
+        l.waitFor(new Locator.WaitForOptions()
+            .setTimeout(800)
+            .setState(WaitForSelectorState.ATTACHED)); // not VISIBLE
+        return l.inputValue();
+      } catch (PlaywrightException ignored) {}
+    }
+
+    if (System.currentTimeMillis() > deadline) break;
+    page.waitForTimeout(600);
+  }
+  throw new RuntimeException("Hidden/input field not found for selector: " + selector);
+}
+
+
+/** Get selected option text for an aria-labeled select at a specific index (1-based). */
+private String getSelectedTextForAriaWithIndex(Page page, String ariaLabel, int index1Based, int timeoutMs) {
+  String nth = ":nth-match(select[aria-label='" + ariaLabel + "']," + index1Based + ")";
+  Locator loc = page.locator(nth).first();
+  if (!isVisibleQuick1111(loc, 1000)) {
+    for (Frame f : page.frames()) {
+      Locator l = f.locator(nth).first();
+      if (isVisibleQuick1111(l, 1000)) { loc = l; break; }
+    }
+  }
+  loc.waitFor(new Locator.WaitForOptions().setTimeout(timeoutMs).setState(WaitForSelectorState.VISIBLE));
+  return loc.locator("option:checked").innerText().trim();
+}
+
+/** Click an absolute XPath whether it’s in the page or any frame. */
+private void clickXPathAnywhere1(Page page, String absoluteXPath, int timeoutMs) {
+  String sel = "xpath=" + absoluteXPath;
+
+  // Try page first
+  Locator pLoc = page.locator(sel);
+  if (isVisibleQuick1111(pLoc, 1200)) { safeClick111(pLoc, timeoutMs); return; }
+
+  // Try frames
+  for (Frame f : page.frames()) {
+    Locator loc = f.locator(sel);
+    if (isVisibleQuick1111(loc, 1200)) { safeClick111(loc, timeoutMs); return; }
+  }
+
+  // Retry late-render
+  page.waitForTimeout(1000);
+  for (Frame f : page.frames()) {
+    Locator loc = f.locator(sel);
+    if (isVisibleQuick1111(loc, 1500)) { safeClick111(loc, timeoutMs); return; }
+  }
+  throw new RuntimeException("Button not found for XPath: " + absoluteXPath);
+}
+
+private boolean isVisibleQuick11(Locator loc, int ms) {
+  try {
+    loc.waitFor(new Locator.WaitForOptions().setTimeout(ms).setState(WaitForSelectorState.VISIBLE));
+    return true;
+  } catch (PlaywrightException ignored) { return false; }
+}
+
+/** Click with enabled check + force fallback for Oracle JET quirks. */
+private void safeClick11(Locator loc, int timeoutMs) {
+  loc.scrollIntoViewIfNeeded();
+  try {
+    loc.page().waitForFunction(
+        "el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+        loc.elementHandle(),
+        new Page.WaitForFunctionOptions().setTimeout(1500));
+  } catch (PlaywrightException ignored) { /* not all elements expose disabled */ }
+
+  try {
+    loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+  } catch (PlaywrightException e) {
+    // last resort
+    loc.click(new Locator.ClickOptions().setTimeout(Math.max(2000, timeoutMs / 2)).setForce(true));
+  }
+}
+
+
+
+
+/* ----------------------- helpers ----------------------- */
+
+/** Finds an input by aria-label across frames and fills it. Optionally presses Tab to commit. */
+private void fillAriaInputAcrossFrames(Page page, String ariaLabel, String value, boolean tabOut) {
+  String sel = "input[aria-label='" + ariaLabel + "']";
+
+  Frame frame = findFirstFrameWithSelector(page, sel, 12_000)
+      .orElseThrow(() -> new RuntimeException("Input with aria-label '" + ariaLabel + "' not found in any frame"));
+
+  Locator input = frame.locator(sel).first();
+  input.waitFor(new Locator.WaitForOptions().setTimeout(8_000).setState(WaitForSelectorState.VISIBLE));
+  input.scrollIntoViewIfNeeded();
+
+  // Robust clear
+  try { input.fill(""); } catch (PlaywrightException ignored) {}
+  input.click(new Locator.ClickOptions().setTimeout(3_000));
+  input.press("Control+A");
+  input.press("Delete");
+
+  // Gentle typing helps with Oracle formatters
+  input.type(value, new Locator.TypeOptions().setDelay(10));
+  if (tabOut) input.press("Tab");
+}
+
+/** Clicks the first visible element matching any selector across page & frames. */
+private boolean clickAcrossFrames(Page page, List<String> selectors, int timeoutMs) {
+  // 1) Try top-level page first
+  for (String s : selectors) {
+    Locator loc = page.locator(s).first();
+    if (isVisibleQuick1111(loc, 1500)) {
+      return safeClick111(loc, timeoutMs);
+    }
+  }
+  // 2) Try each frame
+  for (Frame f : page.frames()) {
+    for (String s : selectors) {
+      Locator loc = f.locator(s).first();
+      if (isVisibleQuick1111(loc, 1500)) {
+        return safeClick111(loc, timeoutMs);
+      }
+    }
+  }
+  // 3) Small settle and retry (late-rendered frames)
+  page.waitForTimeout(1000);
+  for (Frame f : page.frames()) {
+    for (String s : selectors) {
+      Locator loc = f.locator(s).first();
+      if (isVisibleQuick1111(loc, 1500)) {
+        return safeClick111(loc, timeoutMs);
+      }
+    }
+  }
+  return false;
+}
+
+private boolean isVisibleQuick(Locator loc, int ms) {
+  try {
+    loc.waitFor(new Locator.WaitForOptions().setTimeout(ms).setState(WaitForSelectorState.VISIBLE));
+    return true;
+  } catch (PlaywrightException ignored) { return false; }
+}
+
+/** Click with enabled check + force fallback for Oracle JET quirks. */
+private boolean safeClick(Locator loc, int timeoutMs) {
+  loc.scrollIntoViewIfNeeded();
+  try {
+    loc.page().waitForFunction(
+        "el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+        loc.elementHandle(),
+        new Page.WaitForFunctionOptions().setTimeout(1500));
+  } catch (PlaywrightException ignored) { /* not all elements expose disabled */ }
+
+  try {
+    loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+    return true;
+  } catch (PlaywrightException e) {
+    try {     loc.click(new Locator.ClickOptions().setTimeout(Math.max(2000, timeoutMs / 2)).setForce(true));
+      return true;
+    } catch (PlaywrightException ignored) {
+      return false;
+    }
+  }
+}
+
+
+
+
+
+
+
+/* ======================= helpers ======================= */
+
+/** Clear (best-effort) then type text; optionally press Tab to commit in Oracle/JET. */
+private void clearAndType(Locator input, String text, boolean tabOut) {
+  try { input.fill(""); } catch (PlaywrightException ignore) {}
+  input.click(new Locator.ClickOptions().setTimeout(3_000));
+  input.press("Control+A");
+  input.press("Delete");
+  input.type(text, new Locator.TypeOptions().setDelay(10)); // gentle typing helps formatters
+  if (tabOut) input.press("Tab");
+}
+
+/** Click an absolute XPath whether it’s in the page or any frame. */
+private void clickXPathAnywhere(Page page, String absoluteXPath, int timeoutMs) {
+  String sel = "xpath=" + absoluteXPath;
+
+  // 1) Try top-level page
+  Locator pLoc = page.locator(sel);
+  if (isVisibleQuick1111(pLoc, 1200)) {
+    safeClick111(pLoc, timeoutMs);
+    return;
+  }
+
+  // 2) Try each frame (BFS across all frames)
+  for (Frame f : page.frames()) {
+    Locator loc = f.locator(sel);
+    if (isVisibleQuick1111(loc, 1200)) {
+      safeClick111(loc, timeoutMs);
+      return;
+    }
+  }
+
+  // 3) If still not found, wait a bit and retry in frames (handles late iframes)
+  page.waitForTimeout(1000);
+  for (Frame f : page.frames()) {
+    Locator loc = f.locator(sel);
+    if (isVisibleQuick1111(loc, 1500)) {
+      safeClick111(loc, timeoutMs);
+      return;
+    }
+  }
+
+  throw new RuntimeException("Button not found for XPath: " + absoluteXPath);
+}
+
+private boolean isVisibleQuick1(Locator loc, int ms) {
+  try {
+    loc.waitFor(new Locator.WaitForOptions().setTimeout(ms).setState(WaitForSelectorState.VISIBLE));
+    return true;
+  } catch (PlaywrightException ignored) {
+    return false;
+  }
+}
+
+private void safeClick1(Locator loc, int timeoutMs) {
+  loc.scrollIntoViewIfNeeded();
+  try {
+    // best-effort enabled check for Oracle JET
+    loc.page().waitForFunction(
+        "el => !(el.disabled || el.getAttribute('aria-disabled') === 'true')",
+        loc.elementHandle(),
+        new Page.WaitForFunctionOptions().setTimeout(1500));
+  } catch (PlaywrightException ignored) {}
+  try {
+    loc.click(new Locator.ClickOptions().setTimeout(timeoutMs));
+  } catch (PlaywrightException e) {
+    // last resort
+    loc.click(new Locator.ClickOptions().setTimeout(Math.max(2000, timeoutMs / 2)).setForce(true));
+  }
+}
+
+
+
+/* ------------------------- helpers used above ------------------------- */
+
+/** Fill an aria-labeled date input anywhere in the page (search across all frames). */
+private void fillAriaDate(Page page, String ariaLabel, String value) {
+  String sel = "input[aria-label='" + ariaLabel + "']";
+  Frame f = findFirstFrameWithSelector(page, sel, 12_000)
+      .orElseThrow(() -> new RuntimeException("Date input '" + ariaLabel + "' not found in any frame"));
+  Locator input = f.locator(sel);
+  input.waitFor(new Locator.WaitForOptions().setTimeout(8_000).setState(WaitForSelectorState.VISIBLE));
+  input.scrollIntoViewIfNeeded();
+  // Clear then type; Playwright .fill() replaces value, but some Oracle inputs prefer a manual clear
+  try { input.fill(""); } catch (PlaywrightException ignore) {}
+  clearAndType(input, value, true); // tabOut=true to blur and commit
+}
+
+/** Clear (best-effort) then type text; optionally press Tab to commit in Oracle forms. */
+private void clearAndType1(Locator input, String text, boolean tabOut) {
+  try { input.fill(""); } catch (PlaywrightException ignore) {}
+  // Extra clear (some JET inputs ignore .fill(""))
+  input.click(new Locator.ClickOptions().setTimeout(3_000));
+  input.press("Control+A");
+  input.press("Delete");
+  input.type(text, new Locator.TypeOptions().setDelay(10)); // gentle typing helps JET formatters
+  if (tabOut) input.press("Tab");
+}
+
+
+
+@Test(priority = 10)
+public void handleDynamicCheckboxes_Playwright() {
+  test.log(Status.INFO, "handleDynamicCheckboxes (robust) started");
+
+  // Always resolve the iframe fresh
+  Frame frame = resolveMainIFrameOrThrow(page, 15_000);
+  System.out.println("✅ Switched to iframe: mainIFrame");
+
+  // Try both possible table indices (layout sometimes shifts)
+  String[] paths = {
+    "/html/body/form/div[5]/div/div/div[1]/table[3]/tbody/tr/td[1]/input",
+    "/html/body/form/div[5]/div/div/div[1]/table[2]/tbody/tr/td[1]/input"
+  };
+
+  boolean checked = false;
+  for (String xp : paths) {
+    Locator cb = frame.locator("xpath=" + xp).first();
+    try {
+      cb.waitFor(new Locator.WaitForOptions()
+          .setTimeout(5000)
+          .setState(WaitForSelectorState.ATTACHED)); // not VISIBLE
+    } catch (PlaywrightException ignored) { continue; }
+
+    // 1) prefer check()
+    try {
+      cb.check(new Locator.CheckOptions().setTimeout(4000));
+      checked = true;
+    } catch (PlaywrightException e1) {
+      // 2) force click
+      try {
+        cb.click(new Locator.ClickOptions().setTimeout(3000).setForce(true));
+        checked = true;
+      } catch (PlaywrightException e2) {
+        // 3) last resort: set property and dispatch change
+        try {
+          frame.evaluate("(el) => { el.checked = true; el.dispatchEvent(new Event('change', { bubbles:true })); }",
+                         cb.elementHandle());
+          checked = true;
+        } catch (PlaywrightException ignored2) {}
+      }
+    }
+
+    if (checked) {
+      cb.evaluate("el => el.style.border='3px solid red'"); // debug highlight
+      test.log(Status.PASS, "Checkbox ensured to be checked");
+      System.out.println("✔️ Checkbox checked.");
+      break;
+    }
+  }
+
+  if (!checked) throw new RuntimeException("Could not locate/check the checkbox in either table[3] or table[2].");
+
+  page.waitForTimeout(1200);
+}
+
+
+  @AfterClass
+  public void tearDown() {
+    try {
+      if (context != null) context.close();
+      if (browser != null) browser.close();
+      if (playwright != null) playwright.close();
+      test.log(Status.INFO, "Browser closed and Playwright quit successfully.");
+    } finally {
+      if (extent != null) extent.flush();
+    }
+  }
+ }
+
+  
+
